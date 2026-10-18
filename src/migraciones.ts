@@ -1,6 +1,16 @@
 // Cambios de la base de datos. Regla de oro: para cambiar algo, AGREGA una migración nueva al final;
 // nunca edites las anteriores. Se aplican solas, una sola vez, en orden (no hace falta consola).
-export const MIGRACIONES: { id: string; sql: string[] }[] = [
+type Migracion = { id: string; sql: string[]; antes?: (db: D1Database) => Promise<void> };
+
+// El catálogo viejo estaba vacío y guardaba el dinero como decimales. Si por algún motivo tuviera datos, NO se recrea.
+async function protegerCatalogoViejo(db: D1Database) {
+  const existe = await db.prepare(`SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'catalogo'`).first();
+  if (!existe) return;
+  const fila = await db.prepare(`SELECT COUNT(*) AS n FROM catalogo`).first<{ n: number }>();
+  if (fila && fila.n > 0) throw new Error("El catálogo viejo tiene datos: no se recrea automáticamente.");
+}
+
+export const MIGRACIONES: Migracion[] = [
   {
     id: "0001_base",
     sql: [
@@ -42,6 +52,30 @@ export const MIGRACIONES: { id: string; sql: string[] }[] = [
     id: "0002_fecha_tasa_bcv",
     sql: [`ALTER TABLE perfil_emisor ADD COLUMN tasa_bcv_fecha TEXT`],
   },
+  {
+    id: "0003_clientes_catalogo",
+    antes: protegerCatalogoViejo,
+    sql: [
+      `CREATE TABLE IF NOT EXISTS clientes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rif_cedula TEXT NOT NULL UNIQUE,
+        nombre_apellido TEXT NOT NULL,
+        direccion TEXT, whatsapp TEXT, email TEXT,
+        creado_en TEXT DEFAULT (datetime('now')))`,
+      `DROP TABLE IF EXISTS catalogo`,
+      // Dinero en centavos de USD (enteros). precio_centavos NULL = "se define al facturar" (solo servicios).
+      `CREATE TABLE catalogo (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        codigo TEXT,
+        nombre TEXT NOT NULL,
+        tipo TEXT NOT NULL DEFAULT 'SERVICIO' CHECK (tipo IN ('SERVICIO', 'PRODUCTO')),
+        costo_centavos INTEGER CHECK (costo_centavos IS NULL OR costo_centavos >= 0),
+        precio_centavos INTEGER CHECK (precio_centavos IS NULL OR precio_centavos >= 0),
+        alicuota_iva INTEGER NOT NULL DEFAULT 16 CHECK (alicuota_iva IN (0, 8, 16)),
+        activo INTEGER NOT NULL DEFAULT 1)`,
+      `CREATE UNIQUE INDEX idx_catalogo_codigo ON catalogo(codigo) WHERE codigo IS NOT NULL`,
+    ],
+  },
 ];
 
 export async function migrar(db: D1Database) {
@@ -52,6 +86,7 @@ export async function migrar(db: D1Database) {
   const hechas = new Set(results.map((r) => r.id));
   for (const m of MIGRACIONES) {
     if (hechas.has(m.id)) continue;
+    await m.antes?.(db);
     // batch = todo o nada: si algo falla, la migración no queda a medias
     await db.batch([...m.sql.map((s) => db.prepare(s)), db.prepare(`INSERT INTO _migraciones (id) VALUES (?)`).bind(m.id)]);
   }

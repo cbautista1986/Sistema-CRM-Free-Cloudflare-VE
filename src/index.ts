@@ -1,42 +1,19 @@
-import { Hono, type Context } from "hono";
+import { Hono } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { migrar } from "./migraciones";
 import { CLAVE_FALSA, hashClave, sha256, tokenAleatorio, verificarClave } from "./seguridad";
-
-type Usuario = { id: number; nombre: string; email: string; rol: string };
-type Env = { Bindings: { DB: D1Database } };
-type Ctx = Context<Env>;
-type Estado = 400 | 401 | 403 | 404 | 409 | 429;
+import { EMAIL, RIF, ahora, auditar, falla, ip, leerJson, usuarioActual, type Ctx, type Env } from "./comun";
+import clientes from "./rutas/clientes";
+import catalogo from "./rutas/catalogo";
 
 const app = new Hono<Env>();
 const SESION_SEGUNDOS = 60 * 60 * 24 * 7;
 const ESPECIALIDADES = ["SERVICIOS_EQUIPOS", "SOLO_SERVICIOS", "MINIMERCADO"];
-const RIF = /^[VEJGPC]-?\d{6,9}(-?\d)?$/;
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Campos del negocio que el administrador puede editar (lista blanca: nada más se puede tocar)
 const OBLIGATORIOS = ["nombre_razon_social", "rif", "direccion_fiscal"];
 const OPCIONALES = ["telefono", "email", "datos_pago_movil", "datos_transferencia", "datos_zelle", "datos_binance", "datos_paypal"];
 const COLUMNAS_NEGOCIO = [...OBLIGATORIOS, ...OPCIONALES, "especialidad", "tasa_bcv", "tasa_bcv_fecha"].join(", ");
-
-const ahora = () => Math.floor(Date.now() / 1000);
-const falla = (c: Ctx, estado: Estado, error: string) => c.json({ ok: false, error }, estado);
-const ip = (c: Ctx) => c.req.header("CF-Connecting-IP") ?? "local";
-const leerJson = async (c: Ctx) => ((await c.req.json().catch(() => null)) ?? {}) as Record<string, unknown>;
-
-async function auditar(c: Ctx, usuarioId: number | null, accion: string, detalle = "") {
-  await c.env.DB.prepare(`INSERT INTO auditoria (usuario_id, accion, detalle, ip) VALUES (?, ?, ?, ?)`)
-    .bind(usuarioId, accion, detalle.slice(0, 300), ip(c)).run();
-}
-
-async function usuarioActual(c: Ctx) {
-  const token = getCookie(c, "sid");
-  if (!token) return null;
-  return c.env.DB.prepare(
-    `SELECT u.id, u.nombre, u.email, u.rol FROM sesiones s JOIN usuarios u ON u.id = s.usuario_id
-     WHERE s.token_hash = ? AND s.expira_en > ?`
-  ).bind(await sha256(token), ahora()).first<Usuario>();
-}
 
 async function abrirSesion(c: Ctx, usuarioId: number) {
   const token = tokenAleatorio();
@@ -170,6 +147,9 @@ app.put("/api/config", async (c) => {
   await auditar(c, usuario.id, "CONFIG", Object.keys(b).join(","));
   return c.json({ ok: true });
 });
+
+app.route("/api/clientes", clientes);
+app.route("/api/catalogo", catalogo);
 
 app.notFound((c) => c.json({ ok: false, error: "No encontrado." }, 404));
 app.onError((e, c) => {
