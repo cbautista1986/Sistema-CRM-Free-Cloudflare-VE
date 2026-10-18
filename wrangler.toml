@@ -1,0 +1,17 @@
+name = "sistema-crm-free-cloudflare-ve"  # debe ser igual al nombre del Worker en Cloudflare
+main = "src/index.ts"
+compatibility_date = "2025-10-20"
+
+# El front end (carpeta public/) se sirve gratis y sin límite; el Worker solo corre para /api/*
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "facturacion_ve_db"
+database_id = "1c555fec-951d-48f9-bbb4-fc54bf6c2e84"
+
+[observability]
+enabled = true
