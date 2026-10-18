@@ -47,8 +47,8 @@ h2 { font-size: 16px; margin: 24px 0 0; }
 
 .tasa { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-left: 6px solid var(--verde); }
 .tasa strong { font-size: 22px; }
-.tasa form { flex: 1; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
-.tasa form .error { grid-column: 1 / -1; margin: 0; }
+.tasa form { flex: 1; display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
+.tasa form .etiqueta, .tasa form .error { grid-column: 1 / -1; margin: 0; }
 .ganancia strong { display: block; font-size: 32px; margin: 4px 0 8px; color: var(--verde); }
 
 .rejilla { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
@@ -69,3 +69,24 @@ h2 { font-size: 16px; margin: 24px 0 0; }
 
 .burbuja { position: fixed; left: 50%; bottom: 108px; transform: translateX(-50%); z-index: 10; max-width: 90%;
   padding: 12px 18px; border-radius: 20px; background: #202124; color: #fff; font-size: 14px; text-align: center; }
+
+/* Listas (clientes y catálogo) */
+input[type=search] { margin-bottom: 12px; }
+.lista { display: grid; gap: 10px; }
+.fila { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: var(--tarjeta);
+  border: 1px solid var(--borde); border-radius: 20px; cursor: pointer; }
+.fila .dato { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fila strong { overflow: hidden; text-overflow: ellipsis; }
+.fila.apagado { opacity: .55; }
+.ganancia-txt { color: var(--verde); font-weight: 600; font-size: 13px; }
+.icono-tipo { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 14px;
+  border: 2px solid var(--azul); font-size: 22px; }
+.icono-tipo.morado { border-color: var(--morado); }
+.insignia { padding: 4px 10px; border-radius: 12px; background: var(--borde); font-size: 12px; font-weight: 700; }
+a.icono { text-decoration: none; }
+.icono.azul { background: var(--azul); border-color: var(--azul); color: #fff; }
+.icono.verde { border-color: var(--verde); }
+.chips { display: flex; gap: 8px; margin-bottom: 12px; overflow-x: auto; }
+.chip { flex: none; min-height: 40px; padding: 0 16px; border: 1px solid var(--borde); border-radius: 20px;
+  background: var(--tarjeta); color: var(--texto); font: inherit; font-weight: 600; cursor: pointer; }
+.chip.activo { background: var(--azul); border-color: var(--azul); color: #fff; }
