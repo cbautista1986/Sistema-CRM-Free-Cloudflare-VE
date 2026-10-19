@@ -3,14 +3,14 @@
 Cloudflare Workers + Hono + D1. Todo funciona en el plan gratis de Cloudflare.
 
 **Fase 1:** instalador de una sola vez, login seguro, inicio con tasa BCV, ajustes y datos de cobro.
-**Fase 2:** clientes (con búsqueda y botón de WhatsApp) y catálogo de servicios y productos (precio, costo privado, IVA).
+**Fase 2:** clientes (con búsqueda y WhatsApp ordenado solo: se escribe como quieras y se guarda como 584141234567) e inventario de productos y servicios (precio, costo privado, IVA). Un solo sistema para todos los negocios: no hay perfiles.
 
 ## Dónde editar cada cosa (un módulo = un archivo de pantallas + uno de API)
 | Módulo | Pantallas (`public/`) | API (`src/rutas/`) |
 |---|---|---|
 | Entrada, inicio, ajustes | `app.js` | `src/index.ts` |
 | Clientes | `clientes.js` | `clientes.ts` |
-| Catálogo | `catalogo.js` | `catalogo.ts` |
+| Inventario (productos y servicios) | `catalogo.js` | `catalogo.ts` |
 
 - `public/comun.js` y `src/comun.ts` → piezas compartidas. `public/estilos.css` → colores y estilos.
 - `src/seguridad.ts` → contraseñas y sesiones.
