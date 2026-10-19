@@ -53,3 +53,22 @@ export const requiereSesion = createMiddleware<Env>(async (c, next) => {
   c.set("usuario", u);
   await next();
 });
+
+// Teléfonos: la persona escribe como quiera y se guarda siempre igual: código de país + número, sin "+" ni espacios
+// (así sirve directo para https://wa.me/584141234567). Devuelve null si está vacío o { error } si no se entiende.
+const MSG_VE = "Un celular venezolano tiene 10 dígitos y empieza por 4 (ejemplo: 0414-1234567).";
+const MSG_OTRO = "No reconozco ese número. Escríbelo como 0414-1234567, o con + y el código del país (ejemplo: +1 305 555 1234).";
+export function normalizarWhatsapp(v: unknown): string | null | { error: string } {
+  const t = String(v ?? "").trim();
+  if (!t) return null;
+  let d = t.replace(/\D/g, "");
+  const conCodigo = t.startsWith("+") || d.startsWith("00");
+  if (d.startsWith("00")) d = d.slice(2);
+  if (conCodigo) { if (d.startsWith("580")) d = "58" + d.slice(3); } // +58 0414…: ese 0 sobra
+  else if (d.startsWith("0")) d = "58" + d.replace(/^0+/, "");
+  else if (d.length === 10 && d[0] === "4") d = "58" + d;
+  const venezolano = d.startsWith("58");
+  if (venezolano && !/^584\d{9}$/.test(d)) return { error: MSG_VE };
+  if (!/^\d{8,15}$/.test(d) || d.startsWith("0") || (!conCodigo && !venezolano)) return { error: MSG_OTRO };
+  return d;
+}

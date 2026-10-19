@@ -8,12 +8,11 @@ import catalogo from "./rutas/catalogo";
 
 const app = new Hono<Env>();
 const SESION_SEGUNDOS = 60 * 60 * 24 * 7;
-const ESPECIALIDADES = ["SERVICIOS_EQUIPOS", "SOLO_SERVICIOS", "MINIMERCADO"];
 
 // Campos del negocio que el administrador puede editar (lista blanca: nada más se puede tocar)
 const OBLIGATORIOS = ["nombre_razon_social", "rif", "direccion_fiscal"];
 const OPCIONALES = ["telefono", "email", "datos_pago_movil", "datos_transferencia", "datos_zelle", "datos_binance", "datos_paypal"];
-const COLUMNAS_NEGOCIO = [...OBLIGATORIOS, ...OPCIONALES, "especialidad", "tasa_bcv", "tasa_bcv_fecha"].join(", ");
+const COLUMNAS_NEGOCIO = [...OBLIGATORIOS, ...OPCIONALES, "tasa_bcv", "tasa_bcv_fecha"].join(", ");
 
 async function abrirSesion(c: Ctx, usuarioId: number) {
   const token = tokenAleatorio();
@@ -50,21 +49,20 @@ app.post("/api/instalar", async (c) => {
   const t = (k: string) => String(b[k] ?? "").trim();
   const nombre = t("nombre").slice(0, 120), rif = t("rif").toUpperCase(), direccion = t("direccion").slice(0, 200);
   const telefono = t("telefono").slice(0, 40) || null, email = t("email").toLowerCase();
-  const clave = String(b.clave ?? ""), especialidad = t("especialidad") || ESPECIALIDADES[0];
+  const clave = String(b.clave ?? "");
   if (nombre.length < 2) return falla(c, 400, "Escribe el nombre del negocio.");
   if (!RIF.test(rif)) return falla(c, 400, "RIF o cédula no válido (ejemplo: J-12345678-9).");
   if (direccion.length < 5) return falla(c, 400, "Escribe la dirección fiscal.");
   if (!EMAIL.test(email)) return falla(c, 400, "El correo no es válido.");
   if (clave.length < 10) return falla(c, 400, "La contraseña debe tener al menos 10 caracteres.");
-  if (!ESPECIALIDADES.includes(especialidad)) return falla(c, 400, "Especialidad no válida.");
 
   const hash = await hashClave(clave);
   // Las dos inserciones llevan la misma condición: si dos personas instalan a la vez, solo gana una.
   const r = await db.batch([
     db.prepare(
-      `INSERT OR REPLACE INTO perfil_emisor (id, instalado, especialidad, nombre_razon_social, rif, direccion_fiscal, telefono, email, tasa_bcv)
-       SELECT 1, 1, ?, ?, ?, ?, ?, ?, 0 WHERE NOT EXISTS (SELECT 1 FROM usuarios)`
-    ).bind(especialidad, nombre, rif, direccion, telefono, email),
+      `INSERT OR REPLACE INTO perfil_emisor (id, instalado, nombre_razon_social, rif, direccion_fiscal, telefono, email, tasa_bcv)
+       SELECT 1, 1, ?, ?, ?, ?, ?, 0 WHERE NOT EXISTS (SELECT 1 FROM usuarios)`
+    ).bind(nombre, rif, direccion, telefono, email),
     db.prepare(
       `INSERT INTO usuarios (nombre, email, password_hash, rol) SELECT ?, ?, ?, 'ADMIN' WHERE NOT EXISTS (SELECT 1 FROM usuarios)`
     ).bind(nombre, email, hash),
@@ -130,11 +128,6 @@ app.put("/api/config", async (c) => {
   for (const campo of OPCIONALES) {
     if (!(campo in b)) continue;
     sets.push(`${campo} = ?`); valores.push(String(b[campo] ?? "").trim().slice(0, 300) || null);
-  }
-  if ("especialidad" in b) {
-    const e = String(b.especialidad);
-    if (!ESPECIALIDADES.includes(e)) return falla(c, 400, "Especialidad no válida.");
-    sets.push("especialidad = ?"); valores.push(e);
   }
   if ("tasa_bcv" in b) {
     const tasa = Number(String(b.tasa_bcv).replace(",", "."));
