@@ -1,6 +1,6 @@
 // Módulo CLIENTES: /api/clientes
 import { Hono } from "hono";
-import { EMAIL, RIF, auditar, comodin, esForanea, esUnico, falla, idParam, leerJson, requiereSesion, texto, type Env } from "../comun";
+import { EMAIL, RIF, auditar, comodin, esForanea, esUnico, falla, idParam, leerJson, normalizarWhatsapp, requiereSesion, texto, type Env } from "../comun";
 
 const clientes = new Hono<Env>();
 clientes.use("*", requiereSesion);
@@ -9,22 +9,23 @@ const COLUMNAS = "id, rif_cedula, nombre_apellido, direccion, whatsapp, email";
 
 function validar(b: Record<string, unknown>) {
   const rif = texto(b.rif_cedula, 20).toUpperCase(), nombre = texto(b.nombre_apellido, 120);
-  const direccion = texto(b.direccion, 200) || null, whatsapp = texto(b.whatsapp, 30) || null;
+  const direccion = texto(b.direccion, 200) || null, whatsapp = normalizarWhatsapp(texto(b.whatsapp, 40));
   const email = texto(b.email, 120).toLowerCase() || null;
   if (!RIF.test(rif)) return "La cédula o el RIF no es válido (ejemplos: V-12345678, J-12345678-9).";
   if (nombre.length < 2) return "Escribe el nombre y apellido (o la razón social).";
   if (email && !EMAIL.test(email)) return "El correo no es válido.";
-  if (whatsapp && !/^[\d\s+()-]{7,30}$/.test(whatsapp)) return "El WhatsApp solo puede tener números, espacios, + y guiones.";
+  if (whatsapp !== null && typeof whatsapp === "object") return whatsapp.error;
   return { rif, nombre, direccion, whatsapp, email };
 }
 
 clientes.get("/", async (c) => {
   const q = texto(c.req.query("q"), 60), like = `%${comodin(q)}%`;
+  const num = q.replace(/\D/g, "").replace(/^0+/, ""), likeNum = num.length >= 3 ? `%${num}%` : like; // "0414-123" también encuentra 58414123…
   const { results } = await c.env.DB.prepare(
     `SELECT ${COLUMNAS} FROM clientes
      WHERE ? = '' OR nombre_apellido LIKE ? ESCAPE '\\' OR rif_cedula LIKE ? ESCAPE '\\' OR whatsapp LIKE ? ESCAPE '\\'
      ORDER BY nombre_apellido COLLATE NOCASE LIMIT 100`
-  ).bind(q, like, like, like).all();
+  ).bind(q, like, like, likeNum).all();
   return c.json({ ok: true, clientes: results });
 });
 
