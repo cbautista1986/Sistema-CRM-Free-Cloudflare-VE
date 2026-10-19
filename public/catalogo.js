@@ -1,13 +1,17 @@
 // Módulo CATÁLOGO (pantallas): servicios y productos con precio, costo privado e IVA.
 import { $, raiz, esc, bs, usd, aTexto, api, aviso, campo, enviar, navegacion, activar, ERROR } from "./comun.js";
 
-let filtro = ""; // "", "SERVICIO" o "PRODUCTO" (se recuerda al volver a la lista)
+let filtro = "PRODUCTO", elegido = false; // pestaña actual: "PRODUCTO" o "SERVICIO" (se recuerda al volver a la lista)
 
 export async function vistaCatalogo(estado, id) {
   if (id === "nuevo") return formulario(null);
   if (id) {
     try { return formulario((await api(`catalogo/${encodeURIComponent(id)}`)).item); }
-    catch (e) { aviso(e.message); location.hash = "#/catalogo"; return; }
+    catch (e) { aviso(e.message); location.hash = "#/inventario"; return; }
+  }
+  if (!elegido) { // la primera vez, si solo hay servicios, abre directo en la pestaña Servicios
+    elegido = true;
+    try { const { items } = await api("catalogo"); if (items.length && !items.some((i) => i.tipo === "PRODUCTO")) filtro = "SERVICIO"; } catch { /* sigue en Productos */ }
   }
   lista(Number(estado.negocio.tasa_bcv) || 0);
 }
@@ -30,21 +34,21 @@ const fila = (i, tasa) => {
 
 function lista(tasa) {
   raiz.innerHTML = `
-    <header class="encabezado"><h1>🏷️ Catálogo</h1><button class="icono azul" id="nuevo" data-ayuda="Agregar un servicio o producto" aria-label="Nuevo">＋</button></header>
-    <div class="chips">${[["", "Todo"], ["SERVICIO", "🛠️ Servicios"], ["PRODUCTO", "📦 Productos"]]
+    <header class="encabezado"><h1>📦 Inventario</h1><button class="icono azul" id="nuevo" data-ayuda="Agregar un servicio o producto" aria-label="Nuevo">＋</button></header>
+    <div class="chips dos">${[["PRODUCTO", "📦 Productos"], ["SERVICIO", "🛠️ Servicios"]]
       .map(([v, t]) => `<button class="chip ${v === filtro ? "activo" : ""}" data-f="${v}">${t}</button>`).join("")}</div>
     <input id="buscar" type="search" placeholder="🔎 Buscar por nombre o código" aria-label="Buscar" autocomplete="off">
     <div id="lista" class="lista"><p class="suave">Cargando…</p></div>
-    ${navegacion("catalogo")}`;
-  $("#nuevo").addEventListener("click", () => (location.hash = "#/catalogo/nuevo"));
+    ${navegacion("inventario")}`;
+  $("#nuevo").addEventListener("click", () => (location.hash = "#/inventario/nuevo"));
   activar();
   const cargar = async () => {
     const q = $("#buscar").value;
     try {
       const { items } = await api(`catalogo?q=${encodeURIComponent(q)}&tipo=${filtro}`);
       $("#lista").innerHTML = items.length ? items.map((i) => fila(i, tasa)).join("")
-        : `<p class="suave">${q || filtro ? "Sin resultados." : "Aún no hay nada. Toca ＋ para agregar tu primer servicio o producto."}</p>`;
-      $("#lista").querySelectorAll("[data-id]").forEach((el) => el.addEventListener("click", () => (location.hash = `#/catalogo/${el.dataset.id}`)));
+        : `<p class="suave">${q ? "Sin resultados." : `Aún no tienes ${filtro === "SERVICIO" ? "servicios" : "productos"}. Toca ＋ para agregar el primero.`}</p>`;
+      $("#lista").querySelectorAll("[data-id]").forEach((el) => el.addEventListener("click", () => (location.hash = `#/inventario/${el.dataset.id}`)));
     } catch (e) { $("#lista").innerHTML = `<p class="error">${esc(e.message)}</p>`; }
   };
   raiz.querySelectorAll(".chip").forEach((b) => b.addEventListener("click", () => {
@@ -60,7 +64,7 @@ function lista(tasa) {
 const IVAS = [[16, "General 16%"], [8, "Reducido 8%"], [0, "Exento"]];
 
 function formulario(i) {
-  const v = i ?? { tipo: "SERVICIO", alicuota_iva: 16, activo: 1 };
+  const v = i ?? { tipo: filtro, alicuota_iva: 16, activo: 1 };
   raiz.innerHTML = `
     <header class="encabezado"><button class="icono" id="atras" data-ayuda="Volver a la lista" aria-label="Volver">←</button><h1>${i ? "Editar" : "Nuevo"}</h1></header>
     <form id="f" class="tarjeta">
@@ -78,15 +82,15 @@ function formulario(i) {
       ${ERROR}<button class="boton" type="submit">${i ? "GUARDAR CAMBIOS" : "GUARDAR"}</button>
       ${i ? `<button class="boton contorno" type="button" id="borrar">Eliminar</button>` : ""}
     </form>`;
-  $("#atras").addEventListener("click", () => (location.hash = "#/catalogo"));
+  $("#atras").addEventListener("click", () => (location.hash = "#/inventario"));
   enviar($("#f"), async (d) => {
     d.activo = $("#activo") && !$("#activo").checked ? "0" : "1";
     await api(i ? `catalogo/${i.id}` : "catalogo", i ? "PUT" : "POST", d);
-    aviso("Guardado ✅"); location.hash = "#/catalogo";
+    aviso("Guardado ✅"); location.hash = "#/inventario";
   });
   $("#borrar")?.addEventListener("click", async () => {
     if (!confirm(`¿Eliminar "${i.nombre}"?`)) return;
-    try { await api(`catalogo/${i.id}`, "DELETE"); aviso("Eliminado"); location.hash = "#/catalogo"; }
+    try { await api(`catalogo/${i.id}`, "DELETE"); aviso("Eliminado"); location.hash = "#/inventario"; }
     catch (e) { aviso(e.message); }
   });
 }

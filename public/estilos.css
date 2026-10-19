@@ -90,3 +90,10 @@ a.icono { text-decoration: none; }
 .chip { flex: none; min-height: 40px; padding: 0 16px; border: 1px solid var(--borde); border-radius: 20px;
   background: var(--tarjeta); color: var(--texto); font: inherit; font-weight: 600; cursor: pointer; }
 .chip.activo { background: var(--azul); border-color: var(--azul); color: #fff; }
+
+/* Inicio: accesos con subtítulo · pestañas · pistas bajo los campos */
+.accion small { font-weight: 400; font-size: 12px; color: var(--suave); }
+.ganancia[data-destino] { cursor: pointer; }
+.chips.dos .chip { flex: 1; }
+.pista { margin: 6px 0 0; color: var(--suave); font-size: 13px; }
+.pista a { color: var(--azul); font-weight: 600; }

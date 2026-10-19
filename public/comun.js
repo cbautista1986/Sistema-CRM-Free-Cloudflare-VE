@@ -50,8 +50,8 @@ export function enviar(form, accion) {
 
 // Barra inferior: destino "#/ruta" = pantalla lista; "Fase N" = todavía no existe
 const NAV = [
-  ["inicio", "🏠", "Inicio", "#/inicio"], ["facturar", "🧾", "Facturar", "Fase 3"], ["catalogo", "🏷️", "Catálogo", "#/catalogo"],
-  ["clientes", "👥", "Clientes", "#/clientes"], ["info", "📊", "Info", "Fase 6"],
+  ["inicio", "🏠", "Inicio", "#/inicio"], ["factura", "🧾", "Factura", "Fase 3"], ["clientes", "👥", "Clientes", "#/clientes"],
+  ["pagos", "💳", "Pagos", "Fase 4"], ["inventario", "📦", "Inventario", "#/inventario"],
 ];
 export function navegacion(activo) {
   return `<nav class="nav">${NAV.map(([id, icono, nombre, destino]) =>
@@ -63,4 +63,24 @@ export function activar() {
     const d = b.dataset.destino;
     if (d.startsWith("#")) location.hash = d; else aviso(`${b.dataset.nombre} llega en la ${d}`);
   }));
+}
+
+// Teléfonos: la persona escribe como quiera y se guarda siempre igual (código de país + número, sin "+" ni espacios).
+// Devuelve null si está vacío, { error } si no se entiende, o { digitos: "584141234567", bonito: "+58 414 123 4567" }.
+// Debe comportarse igual que normalizarWhatsapp() de src/comun.ts.
+const MSG_VE = "Un celular venezolano tiene 10 dígitos y empieza por 4 (ejemplo: 0414-1234567).";
+const MSG_OTRO = "No reconozco ese número. Escríbelo como 0414-1234567, o con + y el código del país (ejemplo: +1 305 555 1234).";
+export function telefono(texto) {
+  const t = String(texto ?? "").trim();
+  if (!t) return null;
+  let d = t.replace(/\D/g, "");
+  const conCodigo = t.startsWith("+") || d.startsWith("00");
+  if (d.startsWith("00")) d = d.slice(2);
+  if (conCodigo) { if (d.startsWith("580")) d = "58" + d.slice(3); }
+  else if (d.startsWith("0")) d = "58" + d.replace(/^0+/, "");
+  else if (d.length === 10 && d[0] === "4") d = "58" + d;
+  const venezolano = d.startsWith("58");
+  if (venezolano && !/^584\d{9}$/.test(d)) return { error: MSG_VE };
+  if (!/^\d{8,15}$/.test(d) || d.startsWith("0") || (!conCodigo && !venezolano)) return { error: MSG_OTRO };
+  return { digitos: d, bonito: venezolano ? `+58 ${d.slice(2, 5)} ${d.slice(5, 8)} ${d.slice(8)}` : `+${d}` };
 }

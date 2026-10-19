@@ -1,12 +1,5 @@
 // Módulo CLIENTES (pantallas): lista con búsqueda, formulario de alta y edición.
-import { $, raiz, esc, api, aviso, campo, enviar, navegacion, activar, ERROR } from "./comun.js";
-
-// Número para wa.me en formato internacional (Venezuela: 0414-1234567 -> 584141234567)
-const wa = (t) => {
-  let d = String(t ?? "").replace(/\D/g, "");
-  if (d.startsWith("00")) d = d.slice(2); else if (d.startsWith("0")) d = "58" + d.slice(1);
-  return d;
-};
+import { $, raiz, esc, api, aviso, campo, enviar, navegacion, activar, telefono, ERROR } from "./comun.js";
 
 export async function vistaClientes(estado, id) {
   if (id === "nuevo") return formulario(null);
@@ -17,10 +10,13 @@ export async function vistaClientes(estado, id) {
   lista();
 }
 
-const fila = (c) => `<article class="fila" data-id="${c.id}">
-  <div class="dato"><strong>${esc(c.nombre_apellido)}</strong><small class="suave">${esc(c.rif_cedula)}${c.whatsapp ? " · " + esc(c.whatsapp) : ""}</small></div>
-  ${c.whatsapp ? `<a class="icono verde" href="https://wa.me/${wa(c.whatsapp)}" target="_blank" rel="noopener" data-ayuda="Escribir por WhatsApp" aria-label="WhatsApp">💬</a>` : ""}
+const fila = (c) => {
+  const t = telefono(c.whatsapp);
+  return `<article class="fila" data-id="${c.id}">
+  <div class="dato"><strong>${esc(c.nombre_apellido)}</strong><small class="suave">${esc(c.rif_cedula)}${c.whatsapp ? " · " + esc(t?.bonito ?? c.whatsapp) : ""}</small></div>
+  ${t?.digitos ? `<a class="icono verde" href="https://wa.me/${t.digitos}" target="_blank" rel="noopener" data-ayuda="Escribir por WhatsApp" aria-label="WhatsApp">💬</a>` : ""}
 </article>`;
+};
 
 function lista() {
   raiz.innerHTML = `
@@ -53,13 +49,22 @@ function formulario(c) {
     <form id="f" class="tarjeta">
       ${campo("rif_cedula", "🪪 Cédula o RIF", v.rif_cedula, "text", 'required placeholder="V-12345678 o J-12345678-9" autocapitalize="characters"')}
       ${campo("nombre_apellido", "👤 Nombre y apellido (o razón social)", v.nombre_apellido, "text", "required")}
-      ${campo("whatsapp", "📲 WhatsApp", v.whatsapp, "tel", 'placeholder="0414-1234567"')}
+      ${campo("whatsapp", "📲 WhatsApp", v.whatsapp ? (telefono(v.whatsapp)?.bonito ?? v.whatsapp) : "", "tel", 'placeholder="0414-1234567" autocomplete="off"')}
+      <p class="pista">Escríbelo como quieras: <b>0414-1234567</b> o <b>+58 414 1234567</b>. Si es de otro país, empieza con + y el código (ejemplo: +1 305 555 1234).</p>
+      <p class="pista" id="wa-vista" hidden></p>
       ${campo("email", "✉️ Correo", v.email, "email")}
       ${campo("direccion", "📍 Dirección", v.direccion)}
       ${ERROR}<button class="boton" type="submit">${c ? "GUARDAR CAMBIOS" : "GUARDAR CLIENTE"}</button>
       ${c ? `<button class="boton contorno" type="button" id="borrar">Eliminar cliente</button>` : ""}
     </form>`;
   $("#atras").addEventListener("click", () => (location.hash = "#/clientes"));
+  const vistaPrevia = () => { // muestra cómo se va a guardar el número y deja probarlo
+    const r = telefono($("#whatsapp").value), el = $("#wa-vista");
+    el.hidden = !r;
+    if (r) el.innerHTML = r.error ? `<span class="error">${esc(r.error)}</span>`
+      : `✅ Se guardará como <b>${esc(r.bonito)}</b> · <a href="https://wa.me/${r.digitos}" target="_blank" rel="noopener">Probar en WhatsApp</a>`;
+  };
+  $("#whatsapp").addEventListener("input", vistaPrevia); vistaPrevia();
   enviar($("#f"), async (d) => {
     await api(c ? `clientes/${c.id}` : "clientes", c ? "PUT" : "POST", d);
     aviso("Cliente guardado ✅"); location.hash = "#/clientes";

@@ -3,11 +3,6 @@ import { $, raiz, esc, bs, fechaLocal, api, aviso, campo, enviar, navegacion, ac
 import { vistaClientes } from "./clientes.js";
 import { vistaCatalogo } from "./catalogo.js";
 
-const ESPECIALIDADES = [
-  ["SERVICIOS_EQUIPOS", "🛠️ Servicios + venta de equipos"],
-  ["SOLO_SERVICIOS", "💼 Solo servicios profesionales"],
-  ["MINIMERCADO", "🛒 Bodega / minimercado"],
-];
 const NEGOCIO = [
   ["nombre_razon_social", "🏷️ Nombre o razón social"], ["rif", "🪪 RIF o cédula"], ["direccion_fiscal", "📍 Dirección fiscal"],
   ["telefono", "📞 Teléfono"], ["email", "✉️ Correo del negocio"],
@@ -28,9 +23,6 @@ function vistaInstalar() {
       ${campo("telefono", "📞 Teléfono", "", "tel", 'autocomplete="tel"')}
       ${campo("email", "✉️ Tu correo (será tu usuario)", "", "email", 'required autocomplete="username"')}
       ${campo("clave", "🔒 Contraseña (mínimo 10 caracteres)", "", "password", 'required minlength="10" autocomplete="new-password"')}
-      <fieldset><legend>🎯 ¿Cuál es tu especialidad?</legend>
-        ${ESPECIALIDADES.map(([v, t], i) => `<label class="opcion"><input type="radio" name="especialidad" value="${v}" ${i === 0 ? "checked" : ""}> ${t}</label>`).join("")}
-      </fieldset>
       ${ERROR}<button class="boton" type="submit">CREAR SISTEMA Y ENTRAR ➔</button>
     </form></section>`;
   enviar($("#f"), async (d) => { await api("instalar", "POST", d); await ruta(); });
@@ -60,13 +52,13 @@ function vistaInicio() {
         <button class="boton chico verde" type="submit">Guardar</button>
         <button class="boton chico contorno" type="button" id="tasa-cancelar" aria-label="Cancelar">✕</button>${ERROR}</form>
     </section>
-    <section class="tarjeta ganancia"><span class="etiqueta">💰 TU GANANCIA NETA (ESTE MES)</span><strong>$ 0,00</strong>
-      <small class="suave">🟣 Por servicios: $0 · 🔵 Reventa de equipos: $0</small></section>
+    <section class="tarjeta ganancia" data-destino="Fase 6" data-nombre="Informes" data-ayuda="Informes de ventas y ganancias"><span class="etiqueta">💰 TU GANANCIA NETA (ESTE MES)</span><strong>$ 0,00</strong>
+      <small class="suave">🟣 Servicios: $0 · 🔵 Productos: $0</small></section>
     <div class="rejilla">
-      <button class="accion azul" data-destino="Fase 3" data-nombre="Nueva factura o servicio" data-ayuda="Crea una factura o cobra un servicio"><span>⚡</span>Nueva factura o servicio</button>
-      <button class="accion ambar" data-destino="Fase 3" data-nombre="Nuevo presupuesto" data-ayuda="Crea un presupuesto sin mover inventario"><span>📋</span>Nuevo presupuesto</button>
-      <button class="accion verde" data-destino="Fase 4" data-nombre="Enviar mis datos de pago" data-ayuda="Envía tus datos de pago por WhatsApp"><span>📲</span>Enviar mis datos de pago</button>
-      <button class="accion morado" data-destino="Fase 4" data-nombre="Por cobrar / trabajos" data-ayuda="Trabajos en curso y cuentas por cobrar"><span>⏳</span>Por cobrar / trabajos</button>
+      <button class="accion azul" data-destino="Fase 3" data-nombre="Factura" data-ayuda="Presupuestos y facturas"><span>🧾</span>Factura<small>Presupuestos y facturas</small></button>
+      <button class="accion ambar" data-destino="#/clientes" data-nombre="Clientes" data-ayuda="Tus clientes y su WhatsApp"><span>👥</span>Clientes<small>Tus clientes</small></button>
+      <button class="accion verde" data-destino="Fase 4" data-nombre="Pagos" data-ayuda="Por cobrar, pagos recibidos y tus datos de cobro"><span>💳</span>Pagos<small>Cobros y por cobrar</small></button>
+      <button class="accion morado" data-destino="#/inventario" data-nombre="Inventario" data-ayuda="Tus productos y servicios"><span>📦</span>Inventario<small>Productos y servicios</small></button>
     </div>
     <section class="tarjeta"><span class="etiqueta">🔔 ALERTAS RÁPIDAS</span><p class="suave">Todo en orden ✅</p></section>
     ${navegacion("inicio")}`;
@@ -84,8 +76,6 @@ function vistaAjustes() {
     <header class="encabezado"><button class="icono" id="atras" data-ayuda="Volver al inicio" aria-label="Volver">←</button><h1>Ajustes</h1></header>
     <form id="f" class="tarjeta">
       ${NEGOCIO.map(([id, et]) => campo(id, et, n[id])).join("")}
-      <label for="especialidad">🎯 Especialidad</label>
-      <select id="especialidad" name="especialidad">${ESPECIALIDADES.map(([v, t]) => `<option value="${v}" ${v === n.especialidad ? "selected" : ""}>${t}</option>`).join("")}</select>
       <h2>💳 Mis datos de cobro</h2><p class="suave">Se enviarán a tus clientes junto con el monto en Bs y USD.</p>
       ${COBRO.map(([id, et]) => campo(id, et, n[id])).join("")}
       ${ERROR}<button class="boton verde" type="submit">GUARDAR CAMBIOS</button>
@@ -105,7 +95,7 @@ async function ruta() {
     const [seccion, id] = location.hash.replace(/^#\/?/, "").split("/");
     if (seccion === "ajustes") return vistaAjustes();
     if (seccion === "clientes") return await vistaClientes(estado, id);
-    if (seccion === "catalogo") return await vistaCatalogo(estado, id);
+    if (seccion === "inventario" || seccion === "catalogo") return await vistaCatalogo(estado, id);
     vistaInicio();
   } catch (e) {
     raiz.innerHTML = `<section class="tarjeta"><h1>⚠️ No se pudo cargar</h1><p class="error">${esc(e.message)}</p><button class="boton" id="reintentar">Reintentar</button></section>`;
