@@ -1,0 +1,4 @@
+pdf-lib 1.17.1 (licencia MIT) - https://github.com/Hopding/pdf-lib
+Copiado SIN cambios desde el paquete oficial de npm: dist/pdf-lib.min.js
+Se incluye en el proyecto a propósito: el PDF se genera en el navegador y no depende de ningún servicio externo.
+Para actualizarlo: reemplaza el archivo por la versión nueva y vuelve a probar el PDF.
