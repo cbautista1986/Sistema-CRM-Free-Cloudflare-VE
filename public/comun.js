@@ -50,7 +50,7 @@ export function enviar(form, accion) {
 
 // Barra inferior: destino "#/ruta" = pantalla lista; "Fase N" = todavía no existe
 const NAV = [
-  ["inicio", "🏠", "Inicio", "#/inicio"], ["factura", "🧾", "Factura", "Fase 3"], ["clientes", "👥", "Clientes", "#/clientes"],
+  ["inicio", "🏠", "Inicio", "#/inicio"], ["factura", "🧾", "Factura", "#/factura"], ["clientes", "👥", "Clientes", "#/clientes"],
   ["pagos", "💳", "Pagos", "Fase 4"], ["inventario", "📦", "Inventario", "#/inventario"],
 ];
 export function navegacion(activo) {

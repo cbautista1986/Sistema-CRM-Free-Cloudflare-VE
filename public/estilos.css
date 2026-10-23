@@ -97,3 +97,29 @@ a.icono { text-decoration: none; }
 .chips.dos .chip { flex: 1; }
 .pista { margin: 6px 0 0; color: var(--suave); font-size: 13px; }
 .pista a { color: var(--azul); font-weight: 600; }
+
+/* Factura: editor, renglones, totales, avisos */
+textarea { width: 100%; padding: 12px 16px; border: 1px solid var(--borde); border-radius: 16px; background: var(--fondo); color: var(--texto); font: inherit; resize: vertical; }
+textarea:focus { outline: 3px solid rgba(26, 115, 232, .35); border-color: var(--azul); }
+.aviso-practica, .aviso-anulado, .aviso-control { margin-bottom: 14px; padding: 12px 16px; border-radius: 16px; font-size: 14px; border: 1px solid; }
+.aviso-practica, .aviso-control { background: #FFF4E0; color: #7A4B00; border-color: var(--ambar); }
+.aviso-anulado { background: #FDECEA; color: #A5160E; border-color: var(--rojo); font-weight: 600; }
+@media (prefers-color-scheme: dark) { .aviso-practica, .aviso-control { background: #3A2A10; color: #FFD9A0; } .aviso-anulado { background: #3B1714; color: #FFB4AB; } }
+.insignia.verde { background: #D7F0DD; color: #14602B; } .insignia.azul { background: #DCE8FD; color: #0B4BB5; }
+.insignia.rojo { background: #FBDAD7; color: #A5160E; } .insignia.gris { background: var(--borde); }
+.reng { margin: 10px 0; padding: 12px; border: 1px solid var(--borde); border-radius: 18px; }
+.reng-cab { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-weight: 600; }
+.x { min-width: 40px; min-height: 40px; border: 0; background: none; color: var(--rojo); font-size: 18px; cursor: pointer; }
+.reng-fila { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 8px; margin: 8px 0 4px; }
+.reng-fila label { margin: 0; font-size: 12px; }
+.reng-fila input, .reng-fila select { min-height: 44px; padding: 8px 10px; }
+.iva-fijo { display: block; min-height: 44px; padding: 12px 10px; font-weight: 600; }
+.reng-ver { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--borde); }
+.dos-botones { display: flex; gap: 8px; }
+.dos-botones .boton { flex: 1; width: auto; margin-top: 12px; padding: 0 8px; }
+.boton.morado { background: var(--morado); }
+.boton.contorno-azul { background: transparent; color: var(--azul); border: 2px solid var(--azul); }
+.tot { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; }
+.tot b { text-align: right; }
+.tot.grande { margin-top: 6px; padding-top: 10px; border-top: 2px solid var(--borde); font-size: 20px; }
+.sin-borde { padding: 8px 0; border: 0; background: none; cursor: default; }

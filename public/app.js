@@ -1,7 +1,8 @@
 // Entrada de la aplicación: instalador, login, inicio y ajustes. Cada módulo vive en su propio archivo.
-import { $, raiz, esc, bs, fechaLocal, api, aviso, campo, enviar, navegacion, activar, ERROR } from "./comun.js";
+import { $, raiz, esc, bs, usd, fechaLocal, api, aviso, campo, enviar, navegacion, activar, ERROR } from "./comun.js";
 import { vistaClientes } from "./clientes.js";
 import { vistaCatalogo } from "./catalogo.js";
+import { vistaFactura } from "./factura.js";
 
 const NEGOCIO = [
   ["nombre_razon_social", "🏷️ Nombre o razón social"], ["rif", "🪪 RIF o cédula"], ["direccion_fiscal", "📍 Dirección fiscal"],
@@ -43,6 +44,7 @@ function vistaInicio() {
   raiz.innerHTML = `
     <header class="encabezado"><span class="logo">🖼️</span><h1>Hola, ${esc(n.nombre_razon_social)}</h1>
       <button class="icono" id="ajustes" data-ayuda="Ajustes del negocio, datos de cobro y cerrar sesión" aria-label="Ajustes">⚙️</button></header>
+    ${estado.modo === "PRACTICA" ? `<section class="aviso-practica"><b>🧪 MODO PRÁCTICA</b> · los documentos son de prueba y se borran al salir en vivo (Ajustes).</section>` : ""}
     <section class="tarjeta tasa">
       <div id="tasa-vista"><span class="etiqueta">🟢 TASA BCV</span><br><strong>${tasa ? `Bs. ${bs(tasa)}` : "Sin definir"}</strong><br>
         <small class="suave">${n.tasa_bcv_fecha ? `Actualizada: ${fechaLocal(n.tasa_bcv_fecha)}` : "Escribe la tasa de hoy"}</small></div>
@@ -52,10 +54,10 @@ function vistaInicio() {
         <button class="boton chico verde" type="submit">Guardar</button>
         <button class="boton chico contorno" type="button" id="tasa-cancelar" aria-label="Cancelar">✕</button>${ERROR}</form>
     </section>
-    <section class="tarjeta ganancia" data-destino="Fase 6" data-nombre="Informes" data-ayuda="Informes de ventas y ganancias"><span class="etiqueta">💰 TU GANANCIA NETA (ESTE MES)</span><strong>$ 0,00</strong>
-      <small class="suave">🟣 Servicios: $0 · 🔵 Productos: $0</small></section>
+    <section class="tarjeta ganancia" data-destino="Fase 6" data-nombre="Informes" data-ayuda="Informes de ventas y ganancias"><span class="etiqueta">💰 TU GANANCIA NETA (ESTE MES)</span><strong id="gan-total">$ 0,00</strong>
+      <small class="suave" id="gan-det">🟣 Servicios: $0 · 🔵 Productos: $0</small></section>
     <div class="rejilla">
-      <button class="accion azul" data-destino="Fase 3" data-nombre="Factura" data-ayuda="Presupuestos y facturas"><span>🧾</span>Factura<small>Presupuestos y facturas</small></button>
+      <button class="accion azul" data-destino="#/factura" data-nombre="Factura" data-ayuda="Presupuestos y facturas"><span>🧾</span>Factura<small>Presupuestos y facturas</small></button>
       <button class="accion ambar" data-destino="#/clientes" data-nombre="Clientes" data-ayuda="Tus clientes y su WhatsApp"><span>👥</span>Clientes<small>Tus clientes</small></button>
       <button class="accion verde" data-destino="Fase 4" data-nombre="Pagos" data-ayuda="Por cobrar, pagos recibidos y tus datos de cobro"><span>💳</span>Pagos<small>Cobros y por cobrar</small></button>
       <button class="accion morado" data-destino="#/inventario" data-nombre="Inventario" data-ayuda="Tus productos y servicios"><span>📦</span>Inventario<small>Productos y servicios</small></button>
@@ -68,6 +70,9 @@ function vistaInicio() {
   $("#tasa-cancelar").addEventListener("click", () => editando(false));
   enviar($("#tasa-form"), async (d) => { await api("config", "PUT", { tasa_bcv: d.tasa_bcv }); aviso("Tasa actualizada ✅"); await ruta(); });
   activar();
+  api("documentos/resumen").then((r) => { // ganancia real del mes (facturas emitidas)
+    $("#gan-total").textContent = usd(r.total); $("#gan-det").textContent = `🟣 Servicios: ${usd(r.servicios)} · 🔵 Productos: ${usd(r.productos)}`;
+  }).catch(() => {});
 }
 
 function vistaAjustes() {
@@ -80,11 +85,34 @@ function vistaAjustes() {
       ${COBRO.map(([id, et]) => campo(id, et, n[id])).join("")}
       ${ERROR}<button class="boton verde" type="submit">GUARDAR CAMBIOS</button>
     </form>
+    ${estado.modo === "PRACTICA" ? `<section class="tarjeta"><h2>🧪 Modo práctica</h2>
+      <p class="suave">Mientras estés en práctica, las facturas y presupuestos son de prueba: llevan marca de agua, no valen y se borran al salir en vivo. Cuando todo esté probado y revisado con tu contador, sal en vivo para empezar la numeración real.</p>
+      <form id="vivo">
+        ${campo("primer_factura", "🧾 Primer N.º de factura", "1", "text", 'inputmode="numeric" required')}
+        ${campo("primer_control", "🔢 Primer N.º de control interno", "1", "text", 'inputmode="numeric" required')}
+        ${campo("primer_presupuesto", "📋 Primer N.º de presupuesto", "1", "text", 'inputmode="numeric" required')}
+        <label class="opcion"><input type="checkbox" name="confirmo"> Entiendo que se BORRAN los documentos de práctica y que NO se puede volver atrás.</label>
+        ${ERROR}<button class="boton rojo" type="submit">SALIR EN VIVO</button></form></section>`
+      : `<section class="tarjeta"><h2>✅ En vivo</h2><p class="suave">El sistema está en modo real: las facturas emitidas no se pueden editar ni borrar, solo anular.</p></section>`}
+    <section class="tarjeta"><h2>💾 Respaldo</h2><p class="suave">Descarga una copia de todos tus datos (clientes, inventario y documentos). Guárdala fuera del sistema, en un lugar seguro.</p>
+      <button class="boton" id="respaldo" type="button">⬇️ Exportar respaldo</button></section>
     <p class="suave">Sesión: ${esc(estado.usuario.email)}</p>
     <button class="boton contorno" id="salir">Cerrar sesión</button>`;
   $("#atras").addEventListener("click", () => (location.hash = "#/inicio"));
   $("#salir").addEventListener("click", async () => { await api("logout", "POST"); history.replaceState(null, "", "/"); await ruta(); });
   enviar($("#f"), async (d) => { await api("config", "PUT", d); aviso("Guardado ✅"); location.hash = "#/inicio"; });
+  if ($("#vivo")) enviar($("#vivo"), async (d) => {
+    await api("sistema/salir-en-vivo", "POST", { primer_factura: Number(d.primer_factura), primer_control: Number(d.primer_control),
+      primer_presupuesto: Number(d.primer_presupuesto), confirmo: d.confirmo === "on" });
+    aviso("El sistema está en vivo ✅"); await ruta();
+  });
+  $("#respaldo").addEventListener("click", async () => {
+    try {
+      const r = await fetch("/api/sistema/respaldo"); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "No se pudo descargar el respaldo.");
+      const a = document.createElement("a"); a.href = URL.createObjectURL(await r.blob()); a.download = `respaldo-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000); aviso("Respaldo descargado ✅");
+    } catch (e) { aviso(e.message); }
+  });
 }
 
 async function ruta() {
@@ -92,9 +120,10 @@ async function ruta() {
     estado = await api("estado");
     if (!estado.instalado) return vistaInstalar();
     if (!estado.sesion) return vistaLogin();
-    const [seccion, id] = location.hash.replace(/^#\/?/, "").split("/");
+    const [seccion, id, extra] = location.hash.replace(/^#\/?/, "").split("/");
     if (seccion === "ajustes") return vistaAjustes();
     if (seccion === "clientes") return await vistaClientes(estado, id);
+    if (seccion === "factura") return await vistaFactura(estado, id, extra);
     if (seccion === "inventario" || seccion === "catalogo") return await vistaCatalogo(estado, id);
     vistaInicio();
   } catch (e) {

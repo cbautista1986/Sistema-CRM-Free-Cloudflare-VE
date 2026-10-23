@@ -43,13 +43,15 @@ function lista(tasa) {
   $("#nuevo").addEventListener("click", () => (location.hash = "#/inventario/nuevo"));
   activar();
   const cargar = async () => {
+    if (!$("#buscar")) return; // la pantalla ya cambió
     const q = $("#buscar").value;
     try {
       const { items } = await api(`catalogo?q=${encodeURIComponent(q)}&tipo=${filtro}`);
-      $("#lista").innerHTML = items.length ? items.map((i) => fila(i, tasa)).join("")
+      const caja = $("#lista"); if (!caja) return;
+      caja.innerHTML = items.length ? items.map((i) => fila(i, tasa)).join("")
         : `<p class="suave">${q ? "Sin resultados." : `Aún no tienes ${filtro === "SERVICIO" ? "servicios" : "productos"}. Toca ＋ para agregar el primero.`}</p>`;
-      $("#lista").querySelectorAll("[data-id]").forEach((el) => el.addEventListener("click", () => (location.hash = `#/inventario/${el.dataset.id}`)));
-    } catch (e) { $("#lista").innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+      caja.querySelectorAll("[data-id]").forEach((el) => el.addEventListener("click", () => (location.hash = `#/inventario/${el.dataset.id}`)));
+    } catch (e) { if ($("#lista")) $("#lista").innerHTML = `<p class="error">${esc(e.message)}</p>`; }
   };
   raiz.querySelectorAll(".chip").forEach((b) => b.addEventListener("click", () => {
     filtro = b.dataset.f;

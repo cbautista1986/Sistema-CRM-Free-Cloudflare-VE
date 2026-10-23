@@ -27,15 +27,17 @@ function lista() {
   $("#nuevo").addEventListener("click", () => (location.hash = "#/clientes/nuevo"));
   activar();
   const cargar = async () => {
+    if (!$("#buscar")) return; // la pantalla ya cambió
     const q = $("#buscar").value;
     try {
       const { clientes } = await api(`clientes?q=${encodeURIComponent(q)}`);
-      $("#lista").innerHTML = clientes.length ? clientes.map(fila).join("")
+      const caja = $("#lista"); if (!caja) return;
+      caja.innerHTML = clientes.length ? clientes.map(fila).join("")
         : `<p class="suave">${q ? "Sin resultados." : "Aún no tienes clientes. Toca ＋ para agregar el primero."}</p>`;
-      $("#lista").querySelectorAll("[data-id]").forEach((el) => el.addEventListener("click", (e) => {
+      caja.querySelectorAll("[data-id]").forEach((el) => el.addEventListener("click", (e) => {
         if (!e.target.closest("a")) location.hash = `#/clientes/${el.dataset.id}`;
       }));
-    } catch (e) { $("#lista").innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+    } catch (e) { if ($("#lista")) $("#lista").innerHTML = `<p class="error">${esc(e.message)}</p>`; }
   };
   let espera;
   $("#buscar").addEventListener("input", () => { clearTimeout(espera); espera = setTimeout(cargar, 250); });
