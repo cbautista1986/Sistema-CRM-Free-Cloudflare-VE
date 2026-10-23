@@ -22,15 +22,8 @@ export const comodin = (q: string) => q.replace(/[\\%_]/g, "\\$&"); // para bús
 export const esUnico = (e: unknown) => String(e).includes("UNIQUE");
 export const esForanea = (e: unknown) => String(e).includes("FOREIGN KEY");
 
-// El dinero se guarda en centavos enteros (nunca decimales). "12,50" o "12.5" -> 1250.
-// Devuelve null si está vacío y NaN si no es un monto válido.
-export function aCentavos(v: unknown): number | null {
-  const t = String(v ?? "").trim().replace(/\s/g, "").replace(",", ".");
-  if (t === "") return null;
-  if (!/^\d{1,9}(\.\d{1,2})?$/.test(t)) return NaN;
-  const [entero, decimales = ""] = t.split(".");
-  return Number(entero) * 100 + Number(decimales.padEnd(2, "0"));
-}
+// El dinero se guarda en centavos enteros (nunca decimales). La lectura de montos vive en public/dinero.js (misma regla en servidor y navegador).
+export { aCentavos } from "../public/dinero.js";
 
 export async function auditar(c: Ctx, usuarioId: number | null, accion: string, detalle = "") {
   await c.env.DB.prepare(`INSERT INTO auditoria (usuario_id, accion, detalle, ip) VALUES (?, ?, ?, ?)`)
@@ -72,3 +65,26 @@ export function normalizarWhatsapp(v: unknown): string | null | { error: string 
   if (!/^\d{8,15}$/.test(d) || d.startsWith("0") || (!conCodigo && !venezolano)) return { error: MSG_OTRO };
   return d;
 }
+
+// ---- Fechas, modo de trabajo y reglas fiscales vigentes
+export const fechaCaracas = (d = new Date()) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: "America/Caracas", year: "numeric", month: "2-digit", day: "2-digit" }).format(d); // 2026-10-19
+
+export async function modoActual(db: D1Database): Promise<"PRACTICA" | "REAL"> {
+  const f = await db.prepare(`SELECT valor FROM ajustes WHERE clave = 'modo'`).first<{ valor: string }>();
+  return f?.valor === "REAL" ? "REAL" : "PRACTICA";
+}
+
+// Reglas fiscales (IVA permitido, leyendas, validez...) vigentes en una fecha. Ver tabla parametros_fiscales.
+export async function parametrosVigentes(db: D1Database, fecha: string) {
+  const { results } = await db.prepare(
+    `SELECT p.clave, p.valor FROM parametros_fiscales p
+     WHERE p.vigente_desde = (SELECT MAX(q.vigente_desde) FROM parametros_fiscales q WHERE q.clave = p.clave AND q.vigente_desde <= ?)`
+  ).bind(fecha).all<{ clave: string; valor: string }>();
+  return Object.fromEntries(results.map((r) => [r.clave, r.valor])) as Record<string, string>;
+}
+
+export const requiereAdmin = createMiddleware<Env>(async (c, next) => {
+  if (c.get("usuario").rol !== "ADMIN") return falla(c, 403, "Solo el administrador puede hacer esto.");
+  await next();
+});

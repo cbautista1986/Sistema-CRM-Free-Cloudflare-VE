@@ -2,9 +2,11 @@ import { Hono } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { migrar } from "./migraciones";
 import { CLAVE_FALSA, hashClave, sha256, tokenAleatorio, verificarClave } from "./seguridad";
-import { EMAIL, RIF, ahora, auditar, falla, ip, leerJson, usuarioActual, type Ctx, type Env } from "./comun";
+import { EMAIL, RIF, ahora, auditar, falla, ip, leerJson, modoActual, usuarioActual, type Ctx, type Env } from "./comun";
 import clientes from "./rutas/clientes";
 import catalogo from "./rutas/catalogo";
+import documentos from "./rutas/documentos";
+import sistema from "./rutas/sistema";
 
 const app = new Hono<Env>();
 const SESION_SEGUNDOS = 60 * 60 * 24 * 7;
@@ -38,7 +40,7 @@ app.get("/api/estado", async (c) => {
   const usuario = await usuarioActual(c);
   if (!usuario) return c.json({ instalado: true, sesion: false });
   const negocio = await c.env.DB.prepare(`SELECT ${COLUMNAS_NEGOCIO} FROM perfil_emisor WHERE id = 1`).first();
-  return c.json({ instalado: true, sesion: true, usuario, negocio });
+  return c.json({ instalado: true, sesion: true, usuario, negocio, modo: await modoActual(c.env.DB) });
 });
 
 // Instalador tipo WordPress: solo funciona UNA vez; después responde 409 (nadie puede crear otro admin).
@@ -143,6 +145,8 @@ app.put("/api/config", async (c) => {
 
 app.route("/api/clientes", clientes);
 app.route("/api/catalogo", catalogo);
+app.route("/api/documentos", documentos);
+app.route("/api/sistema", sistema);
 
 app.notFound((c) => c.json({ ok: false, error: "No encontrado." }, 404));
 app.onError((e, c) => {
