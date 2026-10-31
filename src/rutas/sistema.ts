@@ -10,11 +10,12 @@ const entero = (v: unknown) => { const n = Number(v); return Number.isInteger(n)
 // Sale del modo práctica UNA vez: borra los documentos de prueba y fija con qué número empieza lo real.
 sistema.post("/salir-en-vivo", async (c) => {
   const db = c.env.DB, b = await leerJson(c);
-  const f = entero(b.primer_factura), k = entero(b.primer_control), p = entero(b.primer_presupuesto);
-  if (!f || !k || !p) return falla(c, 400, "Escribe los tres números iniciales (mínimo 1).");
+  const f = entero(b.primer_factura), k = entero(b.primer_control), p = entero(b.primer_presupuesto), rec = entero(b.primer_recibo ?? 1);
+  if (!f || !k || !p || !rec) return falla(c, 400, "Escribe los tres números iniciales (mínimo 1).");
   if (b.confirmo !== true) return falla(c, 400, "Marca la casilla para confirmar.");
   if ((await modoActual(db)) !== "PRACTICA") return falla(c, 409, "El sistema ya está en vivo.");
   await db.batch([
+    db.prepare(`DELETE FROM pagos WHERE modo = 'PRACTICA'`),
     db.prepare(`DELETE FROM documento_impuestos WHERE documento_id IN (SELECT id FROM documentos WHERE modo = 'PRACTICA')`),
     db.prepare(`DELETE FROM documento_renglones WHERE documento_id IN (SELECT id FROM documentos WHERE modo = 'PRACTICA')`),
     db.prepare(`UPDATE documentos SET presupuesto_id = NULL WHERE modo = 'PRACTICA'`),
@@ -23,6 +24,7 @@ sistema.post("/salir-en-vivo", async (c) => {
     db.prepare(`UPDATE contadores SET valor = ? WHERE clave = 'FACTURA:REAL'`).bind(f - 1),
     db.prepare(`UPDATE contadores SET valor = ? WHERE clave = 'CONTROL:REAL'`).bind(k - 1),
     db.prepare(`UPDATE contadores SET valor = ? WHERE clave = 'PRESUPUESTO:REAL'`).bind(p - 1),
+    db.prepare(`UPDATE contadores SET valor = ? WHERE clave = 'RECIBO:REAL'`).bind(rec - 1),
     db.prepare(`UPDATE ajustes SET valor = 'REAL' WHERE clave = 'modo'`),
   ]);
   await auditar(c, c.get("usuario").id, "SALIR_EN_VIVO", `factura ${f}, control ${k}, presupuesto ${p}`);
@@ -30,7 +32,7 @@ sistema.post("/salir-en-vivo", async (c) => {
 });
 
 // Copia completa de los datos (sin contraseñas ni sesiones) para guardarla fuera del sistema.
-const TABLAS = ["perfil_emisor", "clientes", "catalogo", "documentos", "documento_renglones", "documento_impuestos", "contadores", "parametros_fiscales", "ajustes", "auditoria"];
+const TABLAS = ["perfil_emisor", "clientes", "catalogo", "documentos", "documento_renglones", "documento_impuestos", "pagos", "metodos_cobro", "contadores", "parametros_fiscales", "ajustes", "auditoria"];
 sistema.get("/respaldo", async (c) => {
   const datos: Record<string, unknown> = { generado_en: new Date().toISOString(), version: 1 };
   for (const t of TABLAS) datos[t] = (await c.env.DB.prepare(`SELECT * FROM ${t}`).all()).results;

@@ -3,7 +3,7 @@
 // Un presupuesto emitido pasa a FACTURADO cuando se emite la factura creada desde él.
 import { Hono } from "hono";
 import { aCantidadMilli, aTasaE8, calcular } from "../../public/dinero.js";
-import { aCentavos, auditar, comodin, falla, fechaCaracas, idParam, leerJson, modoActual, parametrosVigentes, requiereSesion, texto, type Ctx, type Env } from "../comun";
+import { PAGADO, aCentavos, auditar, comodin, falla, fechaCaracas, idParam, leerJson, masDias, modoActual, parametrosVigentes, requiereSesion, texto, type Ctx, type Env } from "../comun";
 
 const documentos = new Hono<Env>();
 documentos.use("*", requiereSesion);
@@ -13,7 +13,7 @@ type Fila = Record<string, any>;
 
 const COLUMNAS = `id, tipo, estado, modo, numero, control_interno, control_fiscal, presupuesto_id, cliente_id, cliente_rif, cliente_nombre,
   cliente_direccion, cliente_whatsapp, cliente_email, nota, fecha_emision, emitido_en, tasa_e8, tasa_cargada_en, subtotal_usd, iva_usd, total_usd,
-  subtotal_bs, iva_bs, total_bs, costo_total_usd, parametros_json, emisor_json, anulado_en, motivo_anulacion, creado_en`;
+  subtotal_bs, iva_bs, total_bs, costo_total_usd, parametros_json, emisor_json, anulado_en, motivo_anulacion, creado_en, condicion, dias_credito, vence_el`;
 
 async function cargar(c: Ctx, id: number) {
   const db = c.env.DB;
@@ -61,7 +61,7 @@ async function normalizarLineas(c: Ctx, bruto: unknown, permitidas: number[], ma
   return salida;
 }
 
-async function validarBorrador(c: Ctx, b: Record<string, unknown>) {
+async function validarBorrador(c: Ctx, b: Record<string, unknown>, tipo: string) {
   const db = c.env.DB;
   const params = await parametrosVigentes(db, fechaCaracas());
   const permitidas = (params.iva_alicuotas_cent ?? "0,800,1600").split(",").map(Number);
@@ -69,7 +69,14 @@ async function validarBorrador(c: Ctx, b: Record<string, unknown>) {
   if (clienteId && !(await db.prepare(`SELECT 1 AS x FROM clientes WHERE id = ?`).bind(clienteId).first())) return "El cliente elegido ya no existe.";
   const lineas = await normalizarLineas(c, b.lineas, permitidas, Number(params.max_renglones ?? 30));
   if (typeof lineas === "string") return lineas;
-  try { return { clienteId, nota: texto(b.nota, 500) || null, lineas, calculo: calcular(lineas, null) }; }
+  // Condición de pago (solo facturas): contado o crédito con días de plazo
+  let condicion = "CONTADO", dias: number | null = null;
+  if (tipo === "FACTURA" && texto(b.condicion, 10) === "CREDITO") {
+    dias = Number(b.dias_credito);
+    if (!Number.isInteger(dias) || dias < 1 || dias > 365) return "Escribe los días de crédito (un número entre 1 y 365).";
+    condicion = "CREDITO";
+  }
+  try { return { clienteId, nota: texto(b.nota, 500) || null, lineas, calculo: calcular(lineas, null), condicion, dias }; }
   catch (e) { return (e as Error).message; }
 }
 
@@ -84,7 +91,7 @@ documentos.get("/", async (c) => {
   const q = texto(c.req.query("q"), 60), like = `%${comodin(q)}%`, tipo = texto(c.req.query("tipo"), 12);
   const { results } = await c.env.DB.prepare(
     `SELECT d.id, d.tipo, d.estado, d.modo, d.numero, d.control_interno, COALESCE(d.cliente_nombre, c.nombre_apellido) AS cliente,
-            d.fecha_emision, d.total_usd, d.total_bs, d.creado_en
+            d.fecha_emision, d.total_usd, d.total_bs, d.creado_en, d.vence_el, d.condicion, ${PAGADO} AS pagado_usd
      FROM documentos d LEFT JOIN clientes c ON c.id = d.cliente_id
      WHERE (? = '' OR d.tipo = ?)
        AND (? = '' OR COALESCE(d.cliente_nombre, c.nombre_apellido) LIKE ? ESCAPE '\\' OR CAST(d.numero AS TEXT) LIKE ? ESCAPE '\\')
@@ -105,21 +112,28 @@ documentos.get("/resumen", async (c) => {
 });
 
 documentos.get("/:id", async (c) => {
-  const r = await cargar(c, idParam(c));
-  return r ? c.json({ ok: true, documento: r.doc, lineas: r.lineas, impuestos: r.impuestos }) : falla(c, 404, "Documento no encontrado.");
+  const id = idParam(c), r = await cargar(c, id);
+  if (!r) return falla(c, 404, "Documento no encontrado.");
+  // pagos de este documento y, si viene de un presupuesto, los abonos hechos a ese presupuesto
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, documento_id, numero, metodo, moneda, monto_recibido, tasa_e8, monto_usd, saldo_despues_usd, referencia, fecha_pago, estado, motivo_anulacion
+     FROM pagos WHERE documento_id IN (?, ?) ORDER BY id`).bind(id, r.doc.presupuesto_id ?? 0).all<Fila>();
+  const pagado = results.filter((p) => p.estado === "VIGENTE").reduce((s, p) => s + p.monto_usd, 0);
+  return c.json({ ok: true, documento: r.doc, lineas: r.lineas, impuestos: r.impuestos, pagos: results, pagado_usd: pagado,
+    saldo_usd: r.doc.estado === "BORRADOR" ? null : (r.doc.total_usd ?? 0) - pagado });
 });
 
 // ---------------------------------------------------------------- borradores
 documentos.post("/", async (c) => {
   const b = await leerJson(c), tipo = texto(b.tipo, 12);
   if (tipo !== "FACTURA" && tipo !== "PRESUPUESTO") return falla(c, 400, "El tipo de documento no es válido.");
-  const v = await validarBorrador(c, b);
+  const v = await validarBorrador(c, b, tipo);
   if (typeof v === "string") return falla(c, 400, v);
   const t = v.calculo, u = c.get("usuario");
   const fila = await c.env.DB.prepare(
-    `INSERT INTO documentos (tipo, estado, modo, cliente_id, nota, subtotal_usd, iva_usd, total_usd, costo_total_usd, creado_por)
-     VALUES (?, 'BORRADOR', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
-  ).bind(tipo, await modoActual(c.env.DB), v.clienteId, v.nota, t.subtotal_usd, t.iva_usd, t.total_usd, t.costo_total_usd, u.id).first<{ id: number }>();
+    `INSERT INTO documentos (tipo, estado, modo, cliente_id, nota, subtotal_usd, iva_usd, total_usd, costo_total_usd, creado_por, condicion, dias_credito)
+     VALUES (?, 'BORRADOR', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
+  ).bind(tipo, await modoActual(c.env.DB), v.clienteId, v.nota, t.subtotal_usd, t.iva_usd, t.total_usd, t.costo_total_usd, u.id, v.condicion, v.dias).first<{ id: number }>();
   await c.env.DB.batch(insertarLineas(c, fila!.id, v.lineas, t.renglones));
   await auditar(c, u.id, "DOC_CREAR", `${tipo} ${fila!.id}`);
   return c.json({ ok: true, id: fila!.id });
@@ -127,17 +141,17 @@ documentos.post("/", async (c) => {
 
 documentos.put("/:id", async (c) => {
   const id = idParam(c), db = c.env.DB;
-  const d = await db.prepare(`SELECT estado FROM documentos WHERE id = ?`).bind(id).first<{ estado: string }>();
+  const d = await db.prepare(`SELECT estado, tipo FROM documentos WHERE id = ?`).bind(id).first<{ estado: string; tipo: string }>();
   if (!d) return falla(c, 404, "Documento no encontrado.");
   if (d.estado !== "BORRADOR") return falla(c, 409, "Solo se puede editar un borrador: un documento emitido no se modifica.");
-  const v = await validarBorrador(c, await leerJson(c));
+  const v = await validarBorrador(c, await leerJson(c), d.tipo);
   if (typeof v === "string") return falla(c, 400, v);
   const t = v.calculo;
   await db.batch([
     db.prepare(`DELETE FROM documento_renglones WHERE documento_id = ?`).bind(id),
     ...insertarLineas(c, id, v.lineas, t.renglones),
-    db.prepare(`UPDATE documentos SET cliente_id = ?, nota = ?, subtotal_usd = ?, iva_usd = ?, total_usd = ?, costo_total_usd = ?
-                WHERE id = ? AND estado = 'BORRADOR'`).bind(v.clienteId, v.nota, t.subtotal_usd, t.iva_usd, t.total_usd, t.costo_total_usd, id),
+    db.prepare(`UPDATE documentos SET cliente_id = ?, nota = ?, subtotal_usd = ?, iva_usd = ?, total_usd = ?, costo_total_usd = ?, condicion = ?, dias_credito = ?
+                WHERE id = ? AND estado = 'BORRADOR'`).bind(v.clienteId, v.nota, t.subtotal_usd, t.iva_usd, t.total_usd, t.costo_total_usd, v.condicion, v.dias, id),
   ]);
   await auditar(c, c.get("usuario").id, "DOC_EDITAR", String(id));
   return c.json({ ok: true });
@@ -175,7 +189,7 @@ documentos.post("/:id/emitir", async (c) => {
   let calc;
   try { calc = calcular(lineas as Linea[], tasa); } catch (e) { return falla(c, 400, (e as Error).message); }
 
-  const esFactura = doc.tipo === "FACTURA", claveNum = `${doc.tipo}:${doc.modo}`, claveCtl = `CONTROL:${doc.modo}`;
+  const esFactura = doc.tipo === "FACTURA", vence = esFactura ? (doc.condicion === "CREDITO" ? masDias(fecha, Number(doc.dias_credito)) : fecha) : null, claveNum = `${doc.tipo}:${doc.modo}`, claveCtl = `CONTROL:${doc.modo}`;
   const sigueBorrador = `EXISTS (SELECT 1 FROM documentos WHERE id = ? AND estado = 'BORRADOR')`;
   const emisor = { nombre_razon_social: perfil!.nombre_razon_social, rif: perfil!.rif, direccion_fiscal: perfil!.direccion_fiscal, telefono: perfil!.telefono, email: perfil!.email };
   const reglas = { iva_alicuotas_cent: params.iva_alicuotas_cent, titulo_sin_control: params.titulo_sin_control, leyenda_sin_control: params.leyenda_sin_control,
@@ -196,12 +210,12 @@ documentos.post("/:id/emitir", async (c) => {
        cliente_rif = ?, cliente_nombre = ?, cliente_direccion = ?, cliente_whatsapp = ?, cliente_email = ?,
        fecha_emision = ?, emitido_en = ?, tasa_e8 = ?, tasa_cargada_en = ?,
        subtotal_usd = ?, iva_usd = ?, total_usd = ?, subtotal_bs = ?, iva_bs = ?, total_bs = ?, costo_total_usd = ?,
-       parametros_json = ?, emisor_json = ?
+       parametros_json = ?, emisor_json = ?, vence_el = ?
      WHERE id = ? AND estado = 'BORRADOR'`
   ).bind(...[claveNum, ...(esFactura ? [claveCtl] : []), cli.rif_cedula, cli.nombre_apellido, cli.direccion, cli.whatsapp, cli.email,
     fecha, new Date().toISOString(), tasa, perfil!.tasa_bcv_fecha,
     calc.subtotal_usd, calc.iva_usd, calc.total_usd, calc.subtotal_bs, calc.iva_bs, calc.total_bs, calc.costo_total_usd,
-    JSON.stringify(reglas), JSON.stringify(emisor), id]));
+    JSON.stringify(reglas), JSON.stringify(emisor), vence, id]));
   if (esFactura && doc.presupuesto_id)
     pasos.push(db.prepare(`UPDATE documentos SET estado = 'FACTURADO' WHERE id = ? AND estado = 'EMITIDO'`).bind(doc.presupuesto_id));
 
@@ -221,6 +235,8 @@ documentos.post("/:id/emitir", async (c) => {
 documentos.post("/:id/anular", async (c) => {
   const id = idParam(c), motivo = texto((await leerJson(c)).motivo, 200), u = c.get("usuario");
   if (motivo.length < 5) return falla(c, 400, "Escribe el motivo de la anulación (mínimo 5 letras).");
+  const conPagos = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM pagos WHERE documento_id = ? AND estado = 'VIGENTE'`).bind(id).first<{ n: number }>();
+  if (conPagos && conPagos.n > 0) return falla(c, 409, "Este documento tiene pagos registrados: anula primero sus pagos.");
   const r = await c.env.DB.prepare(
     `UPDATE documentos SET estado = 'ANULADO', anulado_en = ?, anulado_por = ?, motivo_anulacion = ? WHERE id = ? AND estado = 'EMITIDO'`
   ).bind(new Date().toISOString(), u.id, motivo, id).run();
@@ -232,8 +248,8 @@ documentos.post("/:id/anular", async (c) => {
 async function clonar(c: Ctx, origenId: number, tipo: "FACTURA" | "PRESUPUESTO", presupuestoId: number | null) {
   const db = c.env.DB;
   const nuevo = await db.prepare(
-    `INSERT INTO documentos (tipo, estado, modo, cliente_id, nota, presupuesto_id, subtotal_usd, iva_usd, total_usd, costo_total_usd, creado_por)
-     SELECT ?, 'BORRADOR', ?, cliente_id, nota, ?, subtotal_usd, iva_usd, total_usd, costo_total_usd, ? FROM documentos WHERE id = ? RETURNING id`
+    `INSERT INTO documentos (tipo, estado, modo, cliente_id, nota, presupuesto_id, subtotal_usd, iva_usd, total_usd, costo_total_usd, creado_por, condicion, dias_credito)
+     SELECT ?, 'BORRADOR', ?, cliente_id, nota, ?, subtotal_usd, iva_usd, total_usd, costo_total_usd, ?, condicion, dias_credito FROM documentos WHERE id = ? RETURNING id`
   ).bind(tipo, await modoActual(db), presupuestoId, c.get("usuario").id, origenId).first<{ id: number }>();
   await db.prepare(
     `INSERT INTO documento_renglones (documento_id, orden, catalogo_id, tipo, descripcion, cantidad_milli, precio_usd, costo_usd, alicuota_cent, monto_usd)
