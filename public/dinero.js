@@ -72,3 +72,7 @@ export function calcular(lineas, tasaE8) {
   return { renglones, impuestos, costo_total_usd: costo, subtotal_usd, iva_usd, total_usd: seguro(subtotal_usd + iva_usd),
     subtotal_bs, iva_bs, total_bs: conTasa ? seguro(subtotal_bs + iva_bs) : null };
 }
+
+// Pagos: Bs (centavos) ÷ tasa del día del pago = USD (centavos); y al revés. Mitad hacia arriba, exacto.
+export const bsAUsd = (bsCent, tasaE8) => redondear(bsCent, E8, tasaE8);
+export const usdABs = (usdCent, tasaE8) => redondear(usdCent, tasaE8, E8);

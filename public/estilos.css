@@ -40,7 +40,7 @@ h2 { font-size: 16px; margin: 24px 0 0; }
 .error { color: var(--rojo); font-weight: 600; margin: 12px 0 0; }
 
 .encabezado { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.encabezado h1 { flex: 1; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.encabezado h1 { flex: 1; min-width: 0; margin: 0; line-height: 1.2; overflow-wrap: anywhere; }
 .logo, .icono { display: grid; place-items: center; flex: none; width: 48px; height: 48px; border-radius: 16px;
   border: 1px solid var(--borde); background: var(--tarjeta); color: var(--texto); font-size: 22px; }
 .icono { border-radius: 50%; cursor: pointer; }
@@ -123,3 +123,12 @@ textarea:focus { outline: 3px solid rgba(26, 115, 232, .35); border-color: var(-
 .tot b { text-align: right; }
 .tot.grande { margin-top: 6px; padding-top: 10px; border-top: 2px solid var(--borde); font-size: 20px; }
 .sin-borde { padding: 8px 0; border: 0; background: none; cursor: default; }
+
+/* Pagos */
+.chips.tres .chip { flex: 1; padding: 0 6px; font-size: 14px; }
+.insignia.ambar { background: #FFE9C7; color: #7A4B00; }
+.rojo-txt { color: var(--rojo); }
+.alerta-linea { display: inline-block; margin: 2px 0; cursor: pointer; font-weight: 600; }
+.linea-cobro { margin: 6px 0; overflow-wrap: anywhere; }
+.reng-ver[data-recibo] { cursor: pointer; }
+.reng-ver.apagado { opacity: .55; }

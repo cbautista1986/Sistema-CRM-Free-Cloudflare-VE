@@ -51,7 +51,7 @@ export function enviar(form, accion) {
 // Barra inferior: destino "#/ruta" = pantalla lista; "Fase N" = todavía no existe
 const NAV = [
   ["inicio", "🏠", "Inicio", "#/inicio"], ["factura", "🧾", "Factura", "#/factura"], ["clientes", "👥", "Clientes", "#/clientes"],
-  ["pagos", "💳", "Pagos", "Fase 4"], ["inventario", "📦", "Inventario", "#/inventario"],
+  ["pagos", "💳", "Pagos", "#/pagos"], ["inventario", "📦", "Inventario", "#/inventario"],
 ];
 export function navegacion(activo) {
   return `<nav class="nav">${NAV.map(([id, icono, nombre, destino]) =>
@@ -84,3 +84,21 @@ export function telefono(texto) {
   if (!/^\d{8,15}$/.test(d) || d.startsWith("0") || (!conCodigo && !venezolano)) return { error: MSG_OTRO };
   return { digitos: d, bonito: venezolano ? `+58 ${d.slice(2, 5)} ${d.slice(5, 8)} ${d.slice(8)}` : `+${d}` };
 }
+
+// ---- Archivos y PDF (los usan Factura y Pagos)
+let promesaPdf;
+export const cargarPdfLib = () => (window.PDFLib ? Promise.resolve(window.PDFLib) : (promesaPdf ??= new Promise((ok, mal) => {
+  const s = document.createElement("script"); s.src = "/vendor/pdf-lib.min.js";
+  s.onload = () => ok(window.PDFLib); s.onerror = () => { promesaPdf = null; mal(new Error("No se pudo cargar el generador de PDF.")); };
+  document.head.appendChild(s);
+})));
+export function descargar(blob, nombre) {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = nombre; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+export async function compartir(blob, nombre) { // menú Compartir del celular (WhatsApp, Gmail...); si no existe, descarga
+  const archivo = new File([blob], nombre, { type: "application/pdf" });
+  if (navigator.canShare?.({ files: [archivo] })) { await navigator.share({ files: [archivo], title: nombre }); return; }
+  descargar(blob, nombre); aviso("Tu navegador no puede compartir archivos: se descargó el PDF.");
+}
+export function abrirEnlace(url) { const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener"; a.click(); }

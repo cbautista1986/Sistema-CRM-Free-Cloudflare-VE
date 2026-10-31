@@ -135,3 +135,74 @@ export async function construirPdf(L, { doc: D, lineas, impuestos }) {
   });
   return pdf.save();
 }
+
+// ------------------------------------------------------------------ RECIBO DE PAGO (comprobante interno, sin valor fiscal)
+const METODO = { PAGO_MOVIL: "Pago móvil", TRANSFERENCIA: "Transferencia", EFECTIVO: "Efectivo", ZELLE: "Zelle", BINANCE: "Binance Pay", PAYPAL: "PayPal", OTRO: "Otro" };
+export const metodoNombre = (m) => METODO[m] ?? m;
+export const numeroRecibo = (n) => String(n).padStart(8, "0");
+export const nombreRecibo = (p) => `${p.modo === "PRACTICA" ? "PRACTICA-" : ""}Recibo-${numeroRecibo(p.numero)}.pdf`;
+const dolar = (c) => `$ ${num(c)}`;
+
+// construirRecibo(PDFLib, { pago, documento }) -> Uint8Array. Datos tal como los devuelve GET /api/pagos/:id.
+export async function construirRecibo(L, { pago: P, documento: D }) {
+  const { PDFDocument, StandardFonts, rgb, degrees } = L;
+  const pdf = await PDFDocument.create();
+  const f = await pdf.embedFont(StandardFonts.Helvetica), fb = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const permitido = new Set(f.getCharacterSet());
+  const limpio = (t) => [...String(t ?? "").replace(/\s+/g, " ").trim()].map((ch) => (permitido.has(ch.codePointAt(0)) ? ch : "?")).join("");
+  const emisor = JSON.parse(D.emisor_json || "{}"), reglas = JSON.parse(P.reglas_json || "{}");
+  const pag = pdf.addPage([ANCHO, ALTO]), R = ANCHO - M;
+  const T = (t, x, top, { s = 10, b = false, c = [0.12, 0.12, 0.12], der = false } = {}) => {
+    const txt = limpio(t), fuente = b ? fb : f, w = fuente.widthOfTextAtSize(txt, s);
+    pag.drawText(txt, { x: der ? x - w : x, y: ALTO - top - s, size: s, font: fuente, color: rgb(...c) }); return w;
+  };
+  const envolver = (t, max, s, b = false) => {
+    const fuente = b ? fb : f, salida = []; let linea = "";
+    for (const palabra of limpio(t).split(" ")) {
+      const prueba = linea ? `${linea} ${palabra}` : palabra;
+      if (linea && fuente.widthOfTextAtSize(prueba, s) > max) { salida.push(linea); linea = palabra; } else linea = prueba;
+    }
+    if (linea) salida.push(linea); return salida.length ? salida : [""];
+  };
+  const caja = (top, alto, relleno, borde) => pag.drawRectangle({ x: M, y: ALTO - top - alto, width: ANCHO - 2 * M, height: alto, color: rgb(...relleno), borderColor: borde ? rgb(...borde) : undefined, borderWidth: borde ? 1 : 0 });
+  const diagonal = (txt, size, color, opacity, dy) => {
+    const w = fb.widthOfTextAtSize(txt, size), a = (35 * Math.PI) / 180, h = size * 0.7;
+    pag.drawText(txt, { x: ANCHO / 2 - (w / 2) * Math.cos(a) + (h / 2) * Math.sin(a), y: ALTO / 2 - dy - (w / 2) * Math.sin(a) - (h / 2) * Math.cos(a), size, font: fb, color: rgb(...color), rotate: degrees(35), opacity });
+  };
+  if (P.modo === "PRACTICA") diagonal("PRÁCTICA - SIN VALOR", 40, [0.6, 0.6, 0.6], 0.4, 150);
+  if (P.estado === "ANULADO") diagonal("ANULADO", 100, [0.85, 0.15, 0.15], 0.22, -40);
+
+  let y = M, ey = y;
+  T(emisor.nombre_razon_social, M, ey, { s: 14, b: true }); ey += 19;
+  T(`RIF: ${emisor.rif}`, M, ey); ey += 14;
+  for (const l of envolver(emisor.direccion_fiscal, 280, 9)) { T(l, M, ey, { s: 9 }); ey += 12; }
+  const contacto = [emisor.telefono, emisor.email].filter(Boolean).join("  ·  ");
+  if (contacto) { T(contacto, M, ey, { s: 9 }); ey += 12; }
+  let dy = y;
+  T("RECIBO DE PAGO", R, dy, { s: 17, b: true, der: true }); dy += 25;
+  T(`N.º: ${numeroRecibo(P.numero)}`, R, dy, { s: 11, b: true, der: true }); dy += 15;
+  T(`Fecha del pago: ${fecha(P.fecha_pago)}`, R, dy, { s: 9, der: true }); dy += 13;
+  y = Math.max(ey, dy) + 10;
+
+  if (P.estado === "ANULADO") {
+    const ls = envolver(`RECIBO ANULADO el ${fecha(P.anulado_en)}. Motivo: ${P.motivo_anulacion || ""}`, ANCHO - 2 * M - 16, 9, true), h = ls.length * 12 + 10;
+    caja(y, h, [0.98, 0.9, 0.9], [0.85, 0.15, 0.15]); ls.forEach((l, i) => T(l, M + 8, y + 6 + i * 12, { s: 9, b: true, c: [0.7, 0.1, 0.1] })); y += h + 10;
+  }
+  const filas = [
+    ["Recibimos de", D.cliente_nombre], ["RIF / C.I.", D.cliente_rif],
+    ["Por concepto de", `${D.tipo === "FACTURA" ? "Pago de la factura" : "Abono al presupuesto"} ${numeroDoc(D)}`],
+    ["Forma de pago", metodoNombre(P.metodo)], P.referencia && ["Referencia", P.referencia],
+    ["Monto recibido", P.moneda === "BS" ? `Bs. ${num(P.monto_recibido)}` : dolar(P.monto_recibido)],
+    P.moneda === "BS" && ["Tasa BCV del día del pago", `Bs. ${tasaTexto(P.tasa_e8)} por USD`],
+    ["Equivale a (acreditado)", dolar(P.monto_usd)], ["Total del documento", dolar(D.total_usd)],
+    ["Saldo después de este pago", P.saldo_despues_usd === 0 ? `${dolar(0)}  (PAGADO)` : dolar(P.saldo_despues_usd)],
+  ].filter(Boolean);
+  const alto = filas.length * 20 + 14;
+  caja(y, alto, [0.95, 0.96, 0.98]);
+  filas.forEach(([k, v], i) => { T(k, M + 10, y + 9 + i * 20, { s: 9.5, c: [0.4, 0.4, 0.4] }); T(v, M + 190, y + 8 + i * 20, { s: 11, b: ["Monto recibido", "Equivale a (acreditado)", "Recibimos de"].includes(k) }); });
+  y += alto + 14;
+  if (P.nota) { for (const l of envolver(`Nota: ${P.nota}`, ANCHO - 2 * M, 9)) { T(l, M, y, { s: 9 }); y += 12; } y += 4; }
+  for (const l of envolver(reglas.leyenda_recibo || "Recibo de pago: comprobante interno de cobro, sin valor fiscal.", ANCHO - 2 * M, 8)) { T(l, M, y, { s: 8, c: [0.45, 0.45, 0.45] }); y += 11; }
+  T(`Sistema de Facturación (plantilla v${reglas.plantilla_version ?? 1})`, ANCHO / 2 + 90, ALTO - 28, { s: 7.5, c: [0.55, 0.55, 0.55], der: true });
+  return pdf.save();
+}

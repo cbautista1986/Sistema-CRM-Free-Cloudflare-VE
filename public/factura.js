@@ -1,8 +1,9 @@
 // Módulo FACTURA (pantallas): lista, editor de borradores, vista del documento y PDF.
 // Toda la matemática del dinero sale de dinero.js (la misma que usa el servidor).
-import { $, raiz, esc, bs, usd, aTexto, api, aviso, campo, enviar, navegacion, activar, ERROR } from "./comun.js";
+import { $, raiz, esc, bs, usd, aTexto, api, aviso, campo, enviar, navegacion, activar, descargar, compartir, cargarPdfLib, abrirEnlace, ERROR } from "./comun.js";
 import { aTasaE8, aCantidadMilli, aCentavos, calcular, cantidadTexto } from "./dinero.js";
-import { construirPdf, nombreArchivo, numeroDoc } from "./pdf.js";
+import { construirPdf, nombreArchivo, numeroDoc, numeroRecibo, metodoNombre } from "./pdf.js";
+import { mensajeDocumento, enlaceWhatsApp } from "./pagos.js";
 
 const NOMBRE = { FACTURA: "Factura", PRESUPUESTO: "Presupuesto" };
 const ESTADOS = { BORRADOR: ["Borrador", "gris"], EMITIDO: ["Emitido", "verde"], FACTURADO: ["Facturado", "azul"], ANULADO: ["Anulado", "rojo"] };
@@ -13,8 +14,11 @@ const bannerPractica = (estado) => (estado.modo === "PRACTICA"
 
 function tasaInfo(estado) {
   const n = estado.negocio, e8 = aTasaE8(String(n.tasa_bcv));
-  const cargada = n.tasa_bcv_fecha ? dia(new Date(String(n.tasa_bcv_fecha).replace(" ", "T") + "Z")) : null;
-  return { e8: e8 && !Number.isNaN(e8) ? e8 : null, valor: Number(n.tasa_bcv) || 0, vieja: cargada !== dia(new Date()) };
+  const f = n.tasa_bcv_fecha ? new Date(String(n.tasa_bcv_fecha).replace(" ", "T") + "Z") : null;
+  const dias = f ? Math.round((Date.parse(`${dia(new Date())}T00:00:00Z`) - Date.parse(`${dia(f)}T00:00:00Z`)) / 86400000) : null;
+  const cuando = dias === null ? "sin fecha" : dias <= 0 ? "actualizada hoy" : dias === 1 ? "actualizada ayer" : `actualizada hace ${dias} días`;
+  // La tasa BCV no cambia en fines de semana: se alerta solo si pasaron varios días; al emitir siempre se muestra para confirmarla.
+  return { e8: e8 && !Number.isNaN(e8) ? e8 : null, valor: Number(n.tasa_bcv) || 0, cuando, vieja: dias === null || dias > 3 };
 }
 
 let tab = "FACTURA"; // pestaña de la lista (se recuerda)
@@ -29,13 +33,21 @@ export async function vistaFactura(estado, id, extra) {
 }
 
 // ------------------------------------------------------------------ lista
+const estadoVisible = (x) => {
+  if (x.tipo === "FACTURA" && x.estado === "EMITIDO") {
+    if (x.total_usd - x.pagado_usd <= 0) return ["Pagada", "verde"];
+    if (x.vence_el && x.vence_el < dia(new Date())) return ["Vencida", "rojo"];
+    return x.pagado_usd > 0 ? ["Abonada", "ambar"] : ["Por cobrar", "gris"];
+  }
+  return ESTADOS[x.estado];
+};
 const fila = (x) => {
-  const [txt, color] = ESTADOS[x.estado];
+  const [txt, color] = estadoVisible(x);
   const titulo = x.numero == null ? `${NOMBRE[x.tipo]} (borrador)` : `${NOMBRE[x.tipo]} ${numeroDoc(x)}`;
   return `<article class="fila" data-id="${x.id}">
     <div class="dato"><strong>${esc(titulo)}</strong>
       <small class="suave">${esc(x.cliente ?? "Sin cliente")}${x.fecha_emision ? " · " + fechaDoc(x.fecha_emision) : ""}</small>
-      <small class="suave">${usd(x.total_usd)}${x.total_bs != null ? ` · Bs. ${bs(x.total_bs / 100)}` : ""}</small></div>
+      <small class="suave">${usd(x.total_usd)}${x.total_bs != null ? ` · Bs. ${bs(x.total_bs / 100)}` : ""}${x.tipo === "FACTURA" && x.estado === "EMITIDO" && x.total_usd - x.pagado_usd > 0 ? ` · Saldo ${usd(x.total_usd - x.pagado_usd)}` : ""}</small></div>
     <span class="insignia ${color}">${txt}</span>${x.modo === "PRACTICA" ? `<span class="insignia" title="Práctica">🧪</span>` : ""}</article>`;
 };
 
@@ -72,13 +84,13 @@ async function cargarBorrador(id) {
   const { documento: D, lineas } = await api(`documentos/${encodeURIComponent(id)}`);
   if (D.estado !== "BORRADOR") throw new Error("Solo se puede editar un borrador.");
   const cliente = D.cliente_id ? (await api(`clientes/${D.cliente_id}`)).cliente : null;
-  return { id: D.id, tipo: D.tipo, cliente, nota: D.nota ?? "", lineas: lineas.map((l) => ({
+  return { id: D.id, tipo: D.tipo, cliente, nota: D.nota ?? "", condicion: D.condicion ?? "CONTADO", dias_credito: D.dias_credito ?? "", lineas: lineas.map((l) => ({
     catalogo_id: l.catalogo_id, tipo: l.tipo, descripcion: l.descripcion, cantidad: cantidadTexto(l.cantidad_milli),
     precio: aTexto(l.precio_usd), alicuota_iva: l.alicuota_cent / 100, costo_usd: l.costo_usd })) };
 }
 
 function editor(estado, existente, tipoNuevo) {
-  const d = existente ?? { id: null, tipo: tipoNuevo, cliente: null, nota: "", lineas: [] };
+  const d = existente ?? { id: null, tipo: tipoNuevo, cliente: null, nota: "", condicion: "CONTADO", dias_credito: "", lineas: [] };
   const tasa = tasaInfo(estado), nombre = NOMBRE[d.tipo];
   raiz.innerHTML = `
     <header class="encabezado"><button class="icono" id="atras" data-ayuda="Volver" aria-label="Volver">←</button><h1>${d.id ? `Editar ${nombre.toLowerCase()}` : d.tipo === "FACTURA" ? "Nueva factura" : "Nuevo presupuesto"}</h1></header>
@@ -88,6 +100,10 @@ function editor(estado, existente, tipoNuevo) {
       <div class="dos-botones"><button type="button" class="boton chico morado" id="add-inv">🏷️ Del inventario</button><button type="button" class="boton chico" id="add-srv">🛠️ Servicio al momento</button></div>
       <div id="picker" hidden></div></section>
     <section class="tarjeta" id="sec-totales"></section>
+    ${d.tipo === "FACTURA" ? `<section class="tarjeta"><span class="etiqueta">🗓️ CONDICIÓN DE PAGO</span>
+      <label class="opcion"><input type="radio" name="condicion" value="CONTADO" ${d.condicion !== "CREDITO" ? "checked" : ""}> Contado</label>
+      <label class="opcion"><input type="radio" name="condicion" value="CREDITO" ${d.condicion === "CREDITO" ? "checked" : ""}> A crédito (paga después)</label>
+      <div id="dias-box" hidden>${campo("dias_credito", "Días de plazo", d.dias_credito, "text", 'inputmode="numeric" maxlength="3"')}</div></section>` : ""}
     <section class="tarjeta"><label for="nota">📝 Nota o garantía (sale en el PDF)</label><textarea id="nota" rows="3" maxlength="500">${esc(d.nota)}</textarea></section>
     <p class="error" id="error" role="alert" hidden></p>
     <button class="boton verde" type="button" id="emitir">EMITIR ${nombre.toUpperCase()}</button>
@@ -103,7 +119,7 @@ function editor(estado, existente, tipoNuevo) {
       return;
     }
     s.innerHTML = `<span class="etiqueta">👤 CLIENTE</span>
-      <input id="cli-q" type="search" placeholder="🔎 Buscar por nombre, RIF o WhatsApp" autocomplete="off" aria-label="Buscar cliente">
+      <input id="cli-q" type="search" placeholder="🔎 Buscar cliente" autocomplete="off" aria-label="Buscar cliente">
       <div id="cli-res" class="lista"></div>
       <button type="button" class="boton chico" id="cli-nuevo">＋ Cliente nuevo</button>
       <form id="cli-form" hidden>
@@ -116,7 +132,7 @@ function editor(estado, existente, tipoNuevo) {
       try {
         const { clientes } = await api(`clientes?q=${encodeURIComponent($("#cli-q").value)}`);
         if (!$("#cli-res")) return;
-        $("#cli-res").innerHTML = clientes.slice(0, 6).map((c) => `<article class="fila" data-c="${c.id}"><div class="dato"><strong>${esc(c.nombre_apellido)}</strong><small class="suave">${esc(c.rif_cedula)}</small></div></article>`).join("")
+        $("#cli-res").innerHTML = (clientes.length ? `<p class="pista">Toca un cliente para elegirlo:</p>` : "") + clientes.slice(0, 6).map((c) => `<article class="fila" data-c="${c.id}"><div class="dato"><strong>${esc(c.nombre_apellido)}</strong><small class="suave">${esc(c.rif_cedula)}</small></div></article>`).join("")
           || `<p class="suave">No hay coincidencias. Crea el cliente con «＋ Cliente nuevo».</p>`;
         $("#cli-res").querySelectorAll("[data-c]").forEach((el) => el.addEventListener("click", () => { d.cliente = clientes.find((c) => String(c.id) === el.dataset.c); pintarCliente(); }));
       } catch (e) { if ($("#cli-res")) $("#cli-res").innerHTML = `<p class="error">${esc(e.message)}</p>`; }
@@ -198,12 +214,12 @@ function editor(estado, existente, tipoNuevo) {
         : `<div class="tot"><span>Base ${i.alicuota_cent / 100}% · IVA</span><b>${usd(i.base_usd)} · ${usd(i.iva_usd)}</b></div>`).join("")}
       <div class="tot grande"><span>TOTAL USD</span><b>${usd(r.total_usd)}</b></div>
       ${r.total_bs != null ? `<div class="tot"><span>Total en Bs.</span><b>Bs. ${bs(r.total_bs / 100)}</b></div>` : ""}
-      <small class="suave">${tasa.e8 ? `Tasa BCV: Bs. ${bs(tasa.valor)}${tasa.vieja ? " · ⚠️ no se actualizó hoy" : " · actualizada hoy"}` : "⚠️ Define la tasa BCV en el Inicio para ver y emitir en Bs."}</small>
+      <small class="suave">${tasa.e8 ? `Tasa BCV: Bs. ${bs(tasa.valor)}${tasa.vieja ? " · ⚠️ " : " · "}${tasa.cuando}` : "⚠️ Define la tasa BCV en el Inicio para ver y emitir en Bs."}</small>
       ${hayCosto ? `<small class="ganancia-txt">🔒 Ganancia: ${usd(r.subtotal_usd - r.costo_total_usd)} (solo la ves tú)</small>` : ""}`;
   }
 
   // ---- guardar y emitir
-  const cuerpo = () => ({ tipo: d.tipo, cliente_id: d.cliente?.id ?? null, nota: $("#nota").value,
+  const cuerpo = () => ({ tipo: d.tipo, cliente_id: d.cliente?.id ?? null, nota: $("#nota").value, condicion: d.condicion, dias_credito: d.dias_credito,
     lineas: d.lineas.map((l) => ({ catalogo_id: l.catalogo_id, descripcion: l.descripcion, cantidad: l.cantidad, precio_usd: l.precio, alicuota_iva: l.alicuota_iva })) });
   const guardar = async () => { if (d.id) await api(`documentos/${d.id}`, "PUT", cuerpo()); else d.id = (await api("documentos", "POST", cuerpo())).id; };
   const ejecutar = async (fn) => {
@@ -218,25 +234,32 @@ function editor(estado, existente, tipoNuevo) {
     if (c.malas) throw new Error("Revisa los renglones: hay cantidades o precios con formato inválido.");
     if (!c.r.total_bs) throw new Error("Define la tasa BCV de hoy en el Inicio antes de emitir.");
     await guardar();
-    const aviso1 = `¿Emitir ${nombre.toLowerCase()} a ${d.cliente.nombre_apellido} por ${usd(c.r.total_usd)} (Bs. ${bs(c.r.total_bs / 100)})?\n\nDespués NO se puede editar ni borrar: solo anular.`
-      + `${estado.modo === "PRACTICA" ? "\n\n🧪 Modo práctica: es un documento de prueba." : ""}${tasa.vieja ? "\n\n⚠️ La tasa BCV no se actualizó hoy." : ""}`;
+    const aviso1 = `¿Emitir ${nombre.toLowerCase()} a ${d.cliente.nombre_apellido} por ${usd(c.r.total_usd)} (Bs. ${bs(c.r.total_bs / 100)})?\n\nCondición de pago: ${d.tipo === "FACTURA" && d.condicion === "CREDITO" ? `a crédito, ${d.dias_credito} días` : "contado"}.\n\nDespués NO se puede editar ni borrar: solo anular.`
+      + `\n\nTasa BCV usada: Bs. ${bs(tasa.valor)} (${tasa.cuando})${tasa.vieja ? " ⚠️ revísala antes de emitir" : ""}.${estado.modo === "PRACTICA" ? "\n\n🧪 Modo práctica: es un documento de prueba." : ""}`;
     if (!confirm(aviso1)) { aviso("Quedó guardado como borrador."); return; }
     await api(`documentos/${d.id}/emitir`, "POST");
     aviso(`${nombre} emitida ✅`); location.hash = `#/factura/${d.id}`;
   }));
+  if (d.tipo === "FACTURA") { // contado o crédito con días de plazo
+    const mostrar = () => { $("#dias-box").hidden = d.condicion !== "CREDITO"; };
+    raiz.querySelectorAll('input[name="condicion"]').forEach((x) => x.addEventListener("change", () => { d.condicion = x.value; mostrar(); }));
+    $("#dias_credito").addEventListener("input", (e) => { d.dias_credito = e.target.value; });
+    mostrar();
+  }
   pintarCliente(); pintarLineas();
 }
 
 // ------------------------------------------------------------------ vista de un documento
-let promesaPdf;
-const cargarPdfLib = () => (window.PDFLib ? Promise.resolve(window.PDFLib) : (promesaPdf ??= new Promise((ok, mal) => {
-  const s = document.createElement("script"); s.src = "/vendor/pdf-lib.min.js";
-  s.onload = () => ok(window.PDFLib); s.onerror = () => { promesaPdf = null; mal(new Error("No se pudo cargar el generador de PDF.")); };
-  document.head.appendChild(s);
-})));
+
+const seccionPagos = (D, pagos, pagado, saldo) => `<section class="tarjeta"><span class="etiqueta">💵 ${D.tipo === "FACTURA" ? "PAGOS" : "ABONOS"}</span>
+  ${D.tipo === "FACTURA" ? `<div class="tot"><span>Condición</span><b>${D.condicion === "CREDITO" ? `Crédito ${D.dias_credito} días · vence ${fechaDoc(D.vence_el)}` : "Contado"}</b></div>` : ""}
+  <div class="tot"><span>${D.tipo === "FACTURA" ? "Pagado" : "Abonado"}</span><b>${usd(pagado)}</b></div>
+  <div class="tot grande"><span>${saldo > 0 ? "SALDO" : "PAGADA"}</span><b>${usd(Math.max(saldo, 0))}</b></div>
+  ${pagos.map((p) => `<div class="reng-ver ${p.estado === "ANULADO" ? "apagado" : ""}" data-recibo="${p.id}"><div><b>Recibo ${numeroRecibo(p.numero)}</b>${p.estado === "ANULADO" ? " · anulado" : ""}<br>
+    <small class="suave">${esc(metodoNombre(p.metodo))} · ${p.moneda === "BS" ? "Bs. " + bs(p.monto_recibido / 100) : usd(p.monto_recibido)} · ${fechaDoc(p.fecha_pago)}</small></div><b>${usd(p.monto_usd)}</b></div>`).join("")}</section>`;
 
 async function ver(estado, id) {
-  const datos = await api(`documentos/${encodeURIComponent(id)}`), { documento: D, lineas, impuestos } = datos;
+  const datos = await api(`documentos/${encodeURIComponent(id)}`), { documento: D, lineas, impuestos, pagos = [], pagado_usd = 0, saldo_usd = null } = datos;
   const [estTxt, estColor] = ESTADOS[D.estado], emitido = D.estado !== "BORRADOR", reglas = JSON.parse(D.parametros_json || "{}");
   const cliente = D.cliente_nombre ? { nombre: D.cliente_nombre, rif: D.cliente_rif } : D.cliente_id ? await api(`clientes/${D.cliente_id}`).then((r) => ({ nombre: r.cliente.nombre_apellido, rif: r.cliente.rif_cedula })) : null;
   const sinControl = D.tipo === "FACTURA" && emitido && !D.control_fiscal;
@@ -244,6 +267,7 @@ async function ver(estado, id) {
   const botones = D.estado === "BORRADOR"
     ? [["editar", "✏️ Editar", ""], ["emitir", `EMITIR ${NOMBRE[D.tipo].toUpperCase()}`, "verde"], ["borrar", "Eliminar borrador", "contorno"]]
     : [["pdf", "📄 Descargar PDF", ""], ["compartir", "📤 Compartir PDF", "verde"],
+      ...(D.estado === "EMITIDO" && saldo_usd > 0 ? [["pagar", "💵 Registrar pago", "verde"]] : []), ["whatsapp", "💬 Enviar por WhatsApp", ""],
       ...(D.tipo === "PRESUPUESTO" && D.estado === "EMITIDO" ? [["convertir", "🧾 Convertir en factura", ""]] : []),
       ["copiar", "📑 Copiar como borrador nuevo", "contorno-azul"], ...(D.estado === "EMITIDO" ? [["anular", "⛔ Anular", "contorno"]] : [])];
   raiz.innerHTML = `
@@ -267,6 +291,7 @@ async function ver(estado, id) {
       <div class="tot grande"><span>TOTAL</span><b>${usd(D.total_usd)}</b></div>
       ${emitido ? `<div class="tot"><span>Total en Bs.</span><b>Bs. ${bs(D.total_bs / 100)}</b></div>` : `<small class="suave">Los montos en Bs. se fijan al emitir, con la tasa BCV de ese momento.</small>`}
       ${D.costo_total_usd ? `<small class="ganancia-txt">🔒 Ganancia: ${usd(D.subtotal_usd - D.costo_total_usd)} (solo la ves tú)</small>` : ""}</section>
+    ${emitido ? seccionPagos(D, pagos, pagado_usd, saldo_usd) : ""}
     ${D.nota ? `<section class="tarjeta"><span class="etiqueta">📝 NOTA</span><p>${esc(D.nota)}</p></section>` : ""}
     <p class="error" id="error" role="alert" hidden></p>
     ${botones.map(([id2, txt, clase]) => `<button type="button" class="boton ${clase}" data-acc="${id2}">${txt}</button>`).join("")}
@@ -282,17 +307,20 @@ async function ver(estado, id) {
       await api(`documentos/${id}/emitir`, "POST"); aviso("Emitida ✅"); await ver(estado, id);
     }),
     borrar: () => pedir(async () => { if (!confirm("¿Eliminar este borrador?")) return; await api(`documentos/${id}`, "DELETE"); aviso("Borrador eliminado"); location.hash = "#/factura"; }),
-    pdf: () => pedir(async () => { const a = document.createElement("a"); a.href = URL.createObjectURL(await blobPdf()); a.download = nombreArchivo(D); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }),
-    compartir: () => pedir(async () => {
-      const blob = await blobPdf(), archivo = new File([blob], nombreArchivo(D), { type: "application/pdf" });
-      if (navigator.canShare?.({ files: [archivo] })) { await navigator.share({ files: [archivo], title: nombreArchivo(D) }); return; }
-      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = nombreArchivo(D); a.click();
-      aviso("Tu navegador no puede compartir archivos: se descargó el PDF.");
-    }),
+    pdf: () => pedir(async () => descargar(await blobPdf(), nombreArchivo(D))),
+    compartir: () => pedir(async () => compartir(await blobPdf(), nombreArchivo(D))),
     convertir: () => pedir(async () => { const r = await api(`documentos/${id}/convertir`, "POST"); aviso("Borrador de factura creado"); location.hash = `#/factura/${r.id}`; }),
     copiar: () => pedir(async () => { const r = await api(`documentos/${id}/copiar`, "POST"); aviso("Copia creada como borrador"); location.hash = `#/factura/${r.id}`; }),
+    pagar: () => (location.hash = `#/pagos/nuevo/${id}`),
+    whatsapp: () => pedir(async () => {
+      if (!D.cliente_whatsapp) throw new Error("Este cliente no tiene WhatsApp: agrégalo en Clientes.");
+      const { metodos } = await api("pagos/metodos");
+      abrirEnlace(enlaceWhatsApp(D.cliente_whatsapp, mensajeDocumento({ D, pagado: pagado_usd, saldo: saldo_usd ?? D.total_usd, metodos })));
+      aviso("Se abrió WhatsApp con el mensaje. Adjunta el PDF con «Compartir PDF».");
+    }),
     anular: () => { $("#anular-form").hidden = false; $("#motivo").focus(); },
   };
   raiz.querySelectorAll("[data-acc]").forEach((b) => b.addEventListener("click", () => accion[b.dataset.acc]()));
+  raiz.querySelectorAll("[data-recibo]").forEach((el) => el.addEventListener("click", () => (location.hash = `#/pagos/recibo/${el.dataset.recibo}`)));
   enviar($("#anular-form"), async (v) => { await api(`documentos/${id}/anular`, "POST", { motivo: v.motivo }); aviso("Documento anulado"); await ver(estado, id); });
 }

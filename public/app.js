@@ -3,14 +3,11 @@ import { $, raiz, esc, bs, usd, fechaLocal, api, aviso, campo, enviar, navegacio
 import { vistaClientes } from "./clientes.js";
 import { vistaCatalogo } from "./catalogo.js";
 import { vistaFactura } from "./factura.js";
+import { vistaPagos } from "./pagos.js";
 
 const NEGOCIO = [
   ["nombre_razon_social", "🏷️ Nombre o razón social"], ["rif", "🪪 RIF o cédula"], ["direccion_fiscal", "📍 Dirección fiscal"],
   ["telefono", "📞 Teléfono"], ["email", "✉️ Correo del negocio"],
-];
-const COBRO = [
-  ["datos_pago_movil", "📱 Pago móvil (banco, cédula o RIF, teléfono)"], ["datos_transferencia", "🏦 Transferencia (banco y n.º de cuenta)"],
-  ["datos_zelle", "🟣 Zelle (correo y titular)"], ["datos_binance", "🟡 Binance Pay (correo o ID)"], ["datos_paypal", "🔵 PayPal (correo)"],
 ];
 let estado = {};
 
@@ -59,10 +56,10 @@ function vistaInicio() {
     <div class="rejilla">
       <button class="accion azul" data-destino="#/factura" data-nombre="Factura" data-ayuda="Presupuestos y facturas"><span>🧾</span>Factura<small>Presupuestos y facturas</small></button>
       <button class="accion ambar" data-destino="#/clientes" data-nombre="Clientes" data-ayuda="Tus clientes y su WhatsApp"><span>👥</span>Clientes<small>Tus clientes</small></button>
-      <button class="accion verde" data-destino="Fase 4" data-nombre="Pagos" data-ayuda="Por cobrar, pagos recibidos y tus datos de cobro"><span>💳</span>Pagos<small>Cobros y por cobrar</small></button>
+      <button class="accion verde" data-destino="#/pagos" data-nombre="Pagos" data-ayuda="Por cobrar, pagos recibidos y tus datos de cobro"><span>💳</span>Pagos<small>Cobros y por cobrar</small></button>
       <button class="accion morado" data-destino="#/inventario" data-nombre="Inventario" data-ayuda="Tus productos y servicios"><span>📦</span>Inventario<small>Productos y servicios</small></button>
     </div>
-    <section class="tarjeta"><span class="etiqueta">🔔 ALERTAS RÁPIDAS</span><p class="suave">Todo en orden ✅</p></section>
+    <section class="tarjeta"><span class="etiqueta">🔔 ALERTAS RÁPIDAS</span><p class="suave" id="alertas-txt">Todo en orden ✅</p></section>
     ${navegacion("inicio")}`;
   $("#ajustes").addEventListener("click", () => (location.hash = "#/ajustes"));
   const editando = (si) => { $("#tasa-vista").hidden = si; $("#tasa-editar").hidden = si; $("#tasa-form").hidden = !si; if (si) $("#tasa-form input").focus(); };
@@ -73,6 +70,15 @@ function vistaInicio() {
   api("documentos/resumen").then((r) => { // ganancia real del mes (facturas emitidas)
     $("#gan-total").textContent = usd(r.total); $("#gan-det").textContent = `🟣 Servicios: ${usd(r.servicios)} · 🔵 Productos: ${usd(r.productos)}`;
   }).catch(() => {});
+  api("pagos/resumen").then((r) => { // lo que falta por cobrar y lo vencido
+    const t = $("#alertas-txt"); if (!t) return;
+    const lineas = [];
+    if (r.vencidas_n) lineas.push(`⚠️ ${r.vencidas_n} factura(s) vencida(s): ${usd(r.vencidas_usd)}`);
+    if (r.por_cobrar_n) lineas.push(`💵 Por cobrar: ${usd(r.por_cobrar_usd)} en ${r.por_cobrar_n} factura(s)`);
+    if (!lineas.length) return;
+    t.innerHTML = lineas.map((x) => `<span class="alerta-linea">${esc(x)}</span>`).join("<br>");
+    t.querySelectorAll(".alerta-linea").forEach((el) => el.addEventListener("click", () => (location.hash = "#/pagos")));
+  }).catch(() => {});
 }
 
 function vistaAjustes() {
@@ -81,8 +87,7 @@ function vistaAjustes() {
     <header class="encabezado"><button class="icono" id="atras" data-ayuda="Volver al inicio" aria-label="Volver">←</button><h1>Ajustes</h1></header>
     <form id="f" class="tarjeta">
       ${NEGOCIO.map(([id, et]) => campo(id, et, n[id])).join("")}
-      <h2>💳 Mis datos de cobro</h2><p class="suave">Se enviarán a tus clientes junto con el monto en Bs y USD.</p>
-      ${COBRO.map(([id, et]) => campo(id, et, n[id])).join("")}
+      <p class="pista">💳 Tus datos de cobro (pago móvil, Zelle, etc.) ahora se configuran en <b>Pagos → Mis datos</b>.</p>
       ${ERROR}<button class="boton verde" type="submit">GUARDAR CAMBIOS</button>
     </form>
     ${estado.modo === "PRACTICA" ? `<section class="tarjeta"><h2>🧪 Modo práctica</h2>
@@ -91,6 +96,7 @@ function vistaAjustes() {
         ${campo("primer_factura", "🧾 Primer N.º de factura", "1", "text", 'inputmode="numeric" required')}
         ${campo("primer_control", "🔢 Primer N.º de control interno", "1", "text", 'inputmode="numeric" required')}
         ${campo("primer_presupuesto", "📋 Primer N.º de presupuesto", "1", "text", 'inputmode="numeric" required')}
+        ${campo("primer_recibo", "💵 Primer N.º de recibo de pago", "1", "text", 'inputmode="numeric" required')}
         <label class="opcion"><input type="checkbox" name="confirmo"> Entiendo que se BORRAN los documentos de práctica y que NO se puede volver atrás.</label>
         ${ERROR}<button class="boton rojo" type="submit">SALIR EN VIVO</button></form></section>`
       : `<section class="tarjeta"><h2>✅ En vivo</h2><p class="suave">El sistema está en modo real: las facturas emitidas no se pueden editar ni borrar, solo anular.</p></section>`}
@@ -103,7 +109,7 @@ function vistaAjustes() {
   enviar($("#f"), async (d) => { await api("config", "PUT", d); aviso("Guardado ✅"); location.hash = "#/inicio"; });
   if ($("#vivo")) enviar($("#vivo"), async (d) => {
     await api("sistema/salir-en-vivo", "POST", { primer_factura: Number(d.primer_factura), primer_control: Number(d.primer_control),
-      primer_presupuesto: Number(d.primer_presupuesto), confirmo: d.confirmo === "on" });
+      primer_presupuesto: Number(d.primer_presupuesto), primer_recibo: Number(d.primer_recibo), confirmo: d.confirmo === "on" });
     aviso("El sistema está en vivo ✅"); await ruta();
   });
   $("#respaldo").addEventListener("click", async () => {
@@ -124,6 +130,7 @@ async function ruta() {
     if (seccion === "ajustes") return vistaAjustes();
     if (seccion === "clientes") return await vistaClientes(estado, id);
     if (seccion === "factura") return await vistaFactura(estado, id, extra);
+    if (seccion === "pagos") return await vistaPagos(estado, id, extra);
     if (seccion === "inventario" || seccion === "catalogo") return await vistaCatalogo(estado, id);
     vistaInicio();
   } catch (e) {
