@@ -88,3 +88,11 @@ export const requiereAdmin = createMiddleware<Env>(async (c, next) => {
   if (c.get("usuario").rol !== "ADMIN") return falla(c, 403, "Solo el administrador puede hacer esto.");
   await next();
 });
+
+export const masDias = (iso: string, dias: number) => {
+  const f = new Date(`${iso}T12:00:00Z`); f.setUTCDate(f.getUTCDate() + dias);
+  return f.toISOString().slice(0, 10);
+};
+
+// Pagos vigentes de un documento "d" (y, si es una factura creada desde un presupuesto, los abonos hechos al presupuesto).
+export const PAGADO = `(SELECT COALESCE(SUM(p.monto_usd), 0) FROM pagos p WHERE p.estado = 'VIGENTE' AND (p.documento_id = d.id OR p.documento_id = d.presupuesto_id))`;

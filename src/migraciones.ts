@@ -212,6 +212,117 @@ export const MIGRACIONES: Migracion[] = [
         BEGIN SELECT RAISE(ABORT, 'Documento emitido: sus renglones no se pueden cambiar.'); END`,
     ],
   },
+  {
+    id: "0005_pagos",
+    sql: [
+      // Condición de pago: se fija al emitir la factura (contado o crédito con días de plazo).
+      `ALTER TABLE documentos ADD COLUMN condicion TEXT NOT NULL DEFAULT 'CONTADO' CHECK (condicion IN ('CONTADO', 'CREDITO'))`,
+      `ALTER TABLE documentos ADD COLUMN dias_credito INTEGER`,
+      `ALTER TABLE documentos ADD COLUMN vence_el TEXT`,
+      `DROP TRIGGER doc_inmutable`,
+      // Las facturas ya emitidas (Fase 3) reciben vencimiento = su fecha de emisión (se hace con la protección apagada, antes de recrearla).
+      `UPDATE documentos SET vence_el = fecha_emision WHERE tipo = 'FACTURA' AND estado <> 'BORRADOR' AND vence_el IS NULL`,
+      `CREATE TRIGGER doc_inmutable BEFORE UPDATE ON documentos
+        WHEN old.modo = 'REAL' AND old.estado <> 'BORRADOR' AND (
+          old.estado = 'ANULADO'
+          OR new.estado NOT IN ('EMITIDO', 'FACTURADO', 'ANULADO')
+          OR (old.estado = 'FACTURADO' AND new.estado <> 'FACTURADO')
+          OR new.tipo IS NOT old.tipo
+          OR new.modo IS NOT old.modo
+          OR new.numero IS NOT old.numero
+          OR new.control_interno IS NOT old.control_interno
+          OR new.presupuesto_id IS NOT old.presupuesto_id
+          OR new.cliente_id IS NOT old.cliente_id
+          OR new.cliente_rif IS NOT old.cliente_rif
+          OR new.cliente_nombre IS NOT old.cliente_nombre
+          OR new.cliente_direccion IS NOT old.cliente_direccion
+          OR new.cliente_whatsapp IS NOT old.cliente_whatsapp
+          OR new.cliente_email IS NOT old.cliente_email
+          OR new.nota IS NOT old.nota
+          OR new.fecha_emision IS NOT old.fecha_emision
+          OR new.emitido_en IS NOT old.emitido_en
+          OR new.tasa_e8 IS NOT old.tasa_e8
+          OR new.tasa_cargada_en IS NOT old.tasa_cargada_en
+          OR new.subtotal_usd IS NOT old.subtotal_usd
+          OR new.iva_usd IS NOT old.iva_usd
+          OR new.total_usd IS NOT old.total_usd
+          OR new.subtotal_bs IS NOT old.subtotal_bs
+          OR new.iva_bs IS NOT old.iva_bs
+          OR new.total_bs IS NOT old.total_bs
+          OR new.costo_total_usd IS NOT old.costo_total_usd
+          OR new.parametros_json IS NOT old.parametros_json
+          OR new.emisor_json IS NOT old.emisor_json
+          OR new.creado_en IS NOT old.creado_en
+          OR new.creado_por IS NOT old.creado_por
+          OR new.condicion IS NOT old.condicion
+          OR new.dias_credito IS NOT old.dias_credito
+          OR new.vence_el IS NOT old.vence_el)
+        BEGIN SELECT RAISE(ABORT, 'Documento emitido: no se puede modificar, solo anular.'); END`,
+      // Pagos: el saldo NO se guarda, se calcula (total - pagos vigentes), así nunca puede quedar desfasado.
+      `CREATE TABLE pagos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        documento_id INTEGER NOT NULL REFERENCES documentos(id),
+        modo TEXT NOT NULL CHECK (modo IN ('PRACTICA', 'REAL')),
+        numero INTEGER,
+        metodo TEXT NOT NULL CHECK (metodo IN ('PAGO_MOVIL', 'TRANSFERENCIA', 'EFECTIVO', 'ZELLE', 'BINANCE', 'PAYPAL', 'OTRO')),
+        moneda TEXT NOT NULL CHECK (moneda IN ('USD', 'BS')),
+        monto_recibido INTEGER NOT NULL CHECK (monto_recibido > 0),
+        tasa_e8 INTEGER,
+        monto_usd INTEGER NOT NULL CHECK (monto_usd > 0),
+        saldo_despues_usd INTEGER NOT NULL,
+        referencia TEXT, nota TEXT,
+        fecha_pago TEXT NOT NULL,
+        registrado_en TEXT NOT NULL, registrado_por INTEGER,
+        reglas_json TEXT,
+        estado TEXT NOT NULL DEFAULT 'VIGENTE' CHECK (estado IN ('VIGENTE', 'ANULADO')),
+        anulado_en TEXT, anulado_por INTEGER, motivo_anulacion TEXT)`,
+      `CREATE UNIQUE INDEX idx_pago_numero ON pagos(modo, numero) WHERE numero IS NOT NULL`,
+      `CREATE INDEX idx_pago_documento ON pagos(documento_id)`,
+      `CREATE TRIGGER pago_no_borrar BEFORE DELETE ON pagos WHEN old.modo = 'REAL'
+        BEGIN SELECT RAISE(ABORT, 'Un pago registrado no se borra: se anula.'); END`,
+      `CREATE TRIGGER pago_inmutable BEFORE UPDATE ON pagos
+        WHEN old.modo = 'REAL' AND (
+          old.estado = 'ANULADO'
+          OR new.estado NOT IN ('VIGENTE', 'ANULADO')
+          OR new.documento_id IS NOT old.documento_id
+          OR new.modo IS NOT old.modo
+          OR new.numero IS NOT old.numero
+          OR new.metodo IS NOT old.metodo
+          OR new.moneda IS NOT old.moneda
+          OR new.monto_recibido IS NOT old.monto_recibido
+          OR new.tasa_e8 IS NOT old.tasa_e8
+          OR new.monto_usd IS NOT old.monto_usd
+          OR new.saldo_despues_usd IS NOT old.saldo_despues_usd
+          OR new.referencia IS NOT old.referencia
+          OR new.nota IS NOT old.nota
+          OR new.fecha_pago IS NOT old.fecha_pago
+          OR new.registrado_en IS NOT old.registrado_en
+          OR new.registrado_por IS NOT old.registrado_por
+          OR new.reglas_json IS NOT old.reglas_json)
+        BEGIN SELECT RAISE(ABORT, 'Pago registrado: solo se puede anular.'); END`,
+      `INSERT INTO contadores (clave) VALUES ('RECIBO:PRACTICA'), ('RECIBO:REAL')`,
+      `INSERT INTO parametros_fiscales (clave, vigente_desde, valor, nota) VALUES
+        ('leyenda_recibo', '2000-01-01', 'Recibo de pago: comprobante interno de cobro, sin valor fiscal.', 'Texto del recibo en PDF')`,
+      // Datos de cobro con campos fijos por método (antes eran texto libre en Ajustes).
+      `CREATE TABLE metodos_cobro (metodo TEXT PRIMARY KEY, activo INTEGER NOT NULL DEFAULT 0, datos_json TEXT NOT NULL DEFAULT '{}')`,
+      `INSERT INTO metodos_cobro (metodo) VALUES ('PAGO_MOVIL'), ('TRANSFERENCIA'), ('ZELLE'), ('BINANCE'), ('PAYPAL'), ('EFECTIVO')`,
+      // Lo que ya habías escrito en Ajustes se conserva como nota del método.
+      `UPDATE metodos_cobro SET activo = 1, datos_json = json_object('nota', (SELECT datos_pago_movil FROM perfil_emisor WHERE id = 1))
+        WHERE metodo = 'PAGO_MOVIL' AND (SELECT COALESCE(datos_pago_movil, '') FROM perfil_emisor WHERE id = 1) <> ''`,
+      // Lo que ya habías escrito en Ajustes se conserva como nota del método.
+      `UPDATE metodos_cobro SET activo = 1, datos_json = json_object('nota', (SELECT datos_transferencia FROM perfil_emisor WHERE id = 1))
+        WHERE metodo = 'TRANSFERENCIA' AND (SELECT COALESCE(datos_transferencia, '') FROM perfil_emisor WHERE id = 1) <> ''`,
+      // Lo que ya habías escrito en Ajustes se conserva como nota del método.
+      `UPDATE metodos_cobro SET activo = 1, datos_json = json_object('nota', (SELECT datos_zelle FROM perfil_emisor WHERE id = 1))
+        WHERE metodo = 'ZELLE' AND (SELECT COALESCE(datos_zelle, '') FROM perfil_emisor WHERE id = 1) <> ''`,
+      // Lo que ya habías escrito en Ajustes se conserva como nota del método.
+      `UPDATE metodos_cobro SET activo = 1, datos_json = json_object('nota', (SELECT datos_binance FROM perfil_emisor WHERE id = 1))
+        WHERE metodo = 'BINANCE' AND (SELECT COALESCE(datos_binance, '') FROM perfil_emisor WHERE id = 1) <> ''`,
+      // Lo que ya habías escrito en Ajustes se conserva como nota del método.
+      `UPDATE metodos_cobro SET activo = 1, datos_json = json_object('nota', (SELECT datos_paypal FROM perfil_emisor WHERE id = 1))
+        WHERE metodo = 'PAYPAL' AND (SELECT COALESCE(datos_paypal, '') FROM perfil_emisor WHERE id = 1) <> ''`,
+    ],
+  },
 ];
 
 export async function migrar(db: D1Database) {

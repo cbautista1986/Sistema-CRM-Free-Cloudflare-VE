@@ -7,6 +7,7 @@ import clientes from "./rutas/clientes";
 import catalogo from "./rutas/catalogo";
 import documentos from "./rutas/documentos";
 import sistema from "./rutas/sistema";
+import pagos from "./rutas/pagos";
 
 const app = new Hono<Env>();
 const SESION_SEGUNDOS = 60 * 60 * 24 * 7;
@@ -147,6 +148,7 @@ app.route("/api/clientes", clientes);
 app.route("/api/catalogo", catalogo);
 app.route("/api/documentos", documentos);
 app.route("/api/sistema", sistema);
+app.route("/api/pagos", pagos);
 
 app.notFound((c) => c.json({ ok: false, error: "No encontrado." }, 404));
 app.onError((e, c) => {
