@@ -9,6 +9,8 @@ const NOMBRE = { FACTURA: "Factura", PRESUPUESTO: "Presupuesto" };
 const ESTADOS = { BORRADOR: ["Borrador", "gris"], EMITIDO: ["Emitido", "verde"], FACTURADO: ["Facturado", "azul"], ANULADO: ["Anulado", "rojo"] };
 const dia = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Caracas" }).format(d); // 2026-10-19
 const fechaDoc = (iso) => (iso ? String(iso).slice(0, 10).split("-").reverse().join("/") : "");
+const costoAlVuelo = (t) => { const c = aCentavos(t); return c == null || Number.isNaN(c) ? null : c; };
+const stockPoco = (l, q) => (l?.controla && q > l.stock_milli ? ` · ⚠️ Solo hay ${cantidadTexto(Math.max(l.stock_milli, 0))} en existencias` : "");
 const bannerPractica = (estado) => (estado.modo === "PRACTICA"
   ? `<section class="aviso-practica"><b>🧪 MODO PRÁCTICA</b> · los documentos son de prueba, no valen y se borran al salir en vivo (en Ajustes).</section>` : "");
 
@@ -86,7 +88,7 @@ async function cargarBorrador(id) {
   const cliente = D.cliente_id ? (await api(`clientes/${D.cliente_id}`)).cliente : null;
   return { id: D.id, tipo: D.tipo, cliente, nota: D.nota ?? "", condicion: D.condicion ?? "CONTADO", dias_credito: D.dias_credito ?? "", lineas: lineas.map((l) => ({
     catalogo_id: l.catalogo_id, tipo: l.tipo, descripcion: l.descripcion, cantidad: cantidadTexto(l.cantidad_milli),
-    precio: aTexto(l.precio_usd), alicuota_iva: l.alicuota_cent / 100, costo_usd: l.costo_usd })) };
+    precio: aTexto(l.precio_usd), alicuota_iva: l.alicuota_cent / 100, costo_usd: l.costo_usd, costo: l.catalogo_id ? "" : aTexto(l.costo_usd) })) };
 }
 
 function editor(estado, existente, tipoNuevo) {
@@ -97,7 +99,7 @@ function editor(estado, existente, tipoNuevo) {
     ${bannerPractica(estado)}
     <section class="tarjeta" id="sec-cliente"></section>
     <section class="tarjeta"><span class="etiqueta">🧾 RENGLONES</span><div id="lineas"></div>
-      <div class="dos-botones"><button type="button" class="boton chico morado" id="add-inv">🏷️ Del inventario</button><button type="button" class="boton chico" id="add-srv">🛠️ Servicio al momento</button></div>
+      <div class="dos-botones"><button type="button" class="boton chico morado" id="add-inv">🏷️ Del inventario</button><button type="button" class="boton chico" id="add-srv">🛠️ Servicio al momento</button><button type="button" class="boton chico" id="add-prod">📦 Producto al vuelo</button></div>
       <div id="picker" hidden></div></section>
     <section class="tarjeta" id="sec-totales"></section>
     ${d.tipo === "FACTURA" ? `<section class="tarjeta"><span class="etiqueta">🗓️ CONDICIÓN DE PAGO</span>
@@ -150,7 +152,7 @@ function editor(estado, existente, tipoNuevo) {
   const pintarLineas = () => {
     $("#lineas").innerHTML = d.lineas.length ? d.lineas.map((l, i) => `
       <div class="reng" data-i="${i}">
-        <div class="reng-cab"><span>${l.catalogo_id ? (l.tipo === "SERVICIO" ? "🛠️ Servicio" : "📦 Producto") : "🛠️ Servicio al momento"}</span><button type="button" class="x" data-quitar="${i}" aria-label="Quitar renglón">✕</button></div>
+        <div class="reng-cab"><span>${l.catalogo_id ? (l.tipo === "SERVICIO" ? "🛠️ Servicio" : "📦 Producto") : l.tipo === "PRODUCTO" ? "📦 Producto al vuelo" : "🛠️ Servicio al momento"}</span><button type="button" class="x" data-quitar="${i}" aria-label="Quitar renglón">✕</button></div>
         <input data-campo="descripcion" value="${esc(l.descripcion)}" placeholder="Descripción" maxlength="200" aria-label="Descripción">
         <div class="reng-fila">
           <label>Cant.<input data-campo="cantidad" value="${esc(l.cantidad)}" inputmode="decimal" aria-label="Cantidad"></label>
@@ -158,6 +160,7 @@ function editor(estado, existente, tipoNuevo) {
           <label>IVA${l.catalogo_id ? `<span class="iva-fijo">${l.alicuota_iva ? l.alicuota_iva + "%" : "Exento"}</span>`
             : `<select data-campo="alicuota_iva" aria-label="IVA">${[[16, "16%"], [8, "8%"], [0, "Exento"]].map(([n, t]) => `<option value="${n}" ${n === l.alicuota_iva ? "selected" : ""}>${t}</option>`).join("")}</select>`}</label>
         </div>
+        ${!l.catalogo_id && l.tipo === "PRODUCTO" ? `<label>🔒 Costo USD c/u (solo lo ves tú)<input data-campo="costo" value="${esc(l.costo ?? "")}" inputmode="decimal" placeholder="Opcional" aria-label="Costo en USD"></label>` : ""}
         <small class="suave" data-sub="${i}"></small>
       </div>`).join("") : `<p class="suave">Agrega productos o servicios del inventario, o un servicio al momento.</p>`;
     refrescar();
@@ -173,6 +176,10 @@ function editor(estado, existente, tipoNuevo) {
     d.lineas.push({ catalogo_id: null, tipo: "SERVICIO", descripcion: "", cantidad: "1", precio: "", alicuota_iva: 16, costo_usd: null });
     pintarLineas(); raiz.querySelector(`[data-i="${d.lineas.length - 1}"] [data-campo="descripcion"]`).focus();
   });
+  $("#add-prod").addEventListener("click", () => { // equipo que se compra y se vende en el momento: costo y precio, sin pasar por las existencias
+    d.lineas.push({ catalogo_id: null, tipo: "PRODUCTO", descripcion: "", cantidad: "1", precio: "", costo: "", alicuota_iva: 16, costo_usd: null });
+    pintarLineas(); raiz.querySelector(`[data-i="${d.lineas.length - 1}"] [data-campo="descripcion"]`).focus();
+  });
   $("#add-inv").addEventListener("click", () => {
     const p = $("#picker"); p.hidden = !p.hidden; if (p.hidden) return;
     p.innerHTML = `<input id="inv-q" type="search" placeholder="🔎 Buscar en el inventario" autocomplete="off" aria-label="Buscar en el inventario"><div id="inv-res" class="lista"></div>`;
@@ -182,10 +189,10 @@ function editor(estado, existente, tipoNuevo) {
         const { items } = await api(`catalogo?q=${encodeURIComponent($("#inv-q").value)}`), activos = items.filter((i) => i.activo);
         if (!$("#inv-res")) return;
         $("#inv-res").innerHTML = activos.map((i) => `<article class="fila" data-it="${i.id}"><span class="icono-tipo ${i.tipo === "SERVICIO" ? "morado" : ""}">${i.tipo === "SERVICIO" ? "🛠️" : "📦"}</span>
-          <div class="dato"><strong>${esc(i.nombre)}</strong><small class="suave">${i.precio_centavos == null ? "Precio a definir" : usd(i.precio_centavos)}</small></div></article>`).join("") || `<p class="suave">Nada por aquí. Crea productos y servicios en Inventario.</p>`;
+          <div class="dato"><strong>${esc(i.nombre)}</strong><small class="suave">${i.precio_centavos == null ? "Precio a definir" : usd(i.precio_centavos)}${i.tipo === "PRODUCTO" && i.controla_stock ? ` · Stock ${cantidadTexto(i.stock_milli)}` : ""}</small></div></article>`).join("") || `<p class="suave">Nada por aquí. Crea productos y servicios en Inventario.</p>`;
         $("#inv-res").querySelectorAll("[data-it]").forEach((el) => el.addEventListener("click", () => {
           const it = activos.find((x) => String(x.id) === el.dataset.it);
-          d.lineas.push({ catalogo_id: it.id, tipo: it.tipo, descripcion: it.nombre, cantidad: "1", precio: aTexto(it.precio_centavos), alicuota_iva: it.alicuota_iva, costo_usd: it.costo_centavos });
+          d.lineas.push({ catalogo_id: it.id, tipo: it.tipo, descripcion: it.nombre, cantidad: "1", precio: aTexto(it.precio_centavos), alicuota_iva: it.alicuota_iva, costo_usd: it.costo_centavos, controla: it.tipo === "PRODUCTO" && !!it.controla_stock, stock_milli: it.stock_milli });
           p.hidden = true; pintarLineas();
         }));
       } catch (e) { if ($("#inv-res")) $("#inv-res").innerHTML = `<p class="error">${esc(e.message)}</p>`; }
@@ -199,14 +206,14 @@ function editor(estado, existente, tipoNuevo) {
     d.lineas.forEach((l, i) => {
       const cant = aCantidadMilli(l.cantidad), precio = aCentavos(l.precio);
       if (cant === null || Number.isNaN(cant) || precio === null || Number.isNaN(precio)) { malas++; return; }
-      validas.push({ cantidad_milli: cant, precio_usd: precio, alicuota_cent: Math.round(l.alicuota_iva * 100), costo_usd: l.costo_usd, _i: i });
+      validas.push({ cantidad_milli: cant, precio_usd: precio, alicuota_cent: Math.round(l.alicuota_iva * 100), costo_usd: l.catalogo_id ? l.costo_usd : costoAlVuelo(l.costo), _i: i });
     });
     try { return { r: calcular(validas, tasa.e8), validas, malas }; } catch (e) { return { error: e.message, validas, malas }; }
   };
   function refrescar() {
     const c = calculoActual(), t = $("#sec-totales");
     if (c.error) { t.innerHTML = `<p class="error">${esc(c.error)}</p>`; return; }
-    c.validas.forEach((v, k) => { const el = raiz.querySelector(`[data-sub="${v._i}"]`); if (el) el.textContent = `Subtotal ${usd(c.r.renglones[k].monto_usd)}${c.r.renglones[k].monto_bs != null ? ` · Bs. ${bs(c.r.renglones[k].monto_bs / 100)}` : ""}`; });
+    c.validas.forEach((v, k) => { const el = raiz.querySelector(`[data-sub="${v._i}"]`); if (el) el.textContent = `Subtotal ${usd(c.r.renglones[k].monto_usd)}${c.r.renglones[k].monto_bs != null ? ` · Bs. ${bs(c.r.renglones[k].monto_bs / 100)}` : ""}${stockPoco(d.lineas[v._i], v.cantidad_milli)}`; });
     d.lineas.forEach((l, i) => { if (!c.validas.some((v) => v._i === i)) { const el = raiz.querySelector(`[data-sub="${i}"]`); if (el) el.textContent = "⚠️ Revisa la cantidad y el precio (ejemplo: 1 y 12,50)"; } });
     const r = c.r, hayCosto = c.validas.some((v) => v.costo_usd != null);
     t.innerHTML = `<span class="etiqueta">💰 TOTALES</span>
@@ -220,7 +227,7 @@ function editor(estado, existente, tipoNuevo) {
 
   // ---- guardar y emitir
   const cuerpo = () => ({ tipo: d.tipo, cliente_id: d.cliente?.id ?? null, nota: $("#nota").value, condicion: d.condicion, dias_credito: d.dias_credito,
-    lineas: d.lineas.map((l) => ({ catalogo_id: l.catalogo_id, descripcion: l.descripcion, cantidad: l.cantidad, precio_usd: l.precio, alicuota_iva: l.alicuota_iva })) });
+    lineas: d.lineas.map((l) => ({ catalogo_id: l.catalogo_id, descripcion: l.descripcion, cantidad: l.cantidad, precio_usd: l.precio, alicuota_iva: l.alicuota_iva, ...(l.catalogo_id ? {} : { tipo: l.tipo, costo_usd: l.costo ?? "" }) })) });
   const guardar = async () => { if (d.id) await api(`documentos/${d.id}`, "PUT", cuerpo()); else d.id = (await api("documentos", "POST", cuerpo())).id; };
   const ejecutar = async (fn) => {
     const err = $("#error"), botones = [$("#emitir"), $("#guardar")]; err.hidden = true; botones.forEach((b) => (b.disabled = true));

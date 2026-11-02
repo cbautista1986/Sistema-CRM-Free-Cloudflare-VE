@@ -115,8 +115,8 @@ textarea:focus { outline: 3px solid rgba(26, 115, 232, .35); border-color: var(-
 .reng-fila input, .reng-fila select { min-height: 44px; padding: 8px 10px; }
 .iva-fijo { display: block; min-height: 44px; padding: 12px 10px; font-weight: 600; }
 .reng-ver { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--borde); }
-.dos-botones { display: flex; gap: 8px; }
-.dos-botones .boton { flex: 1; width: auto; margin-top: 12px; padding: 0 8px; }
+.dos-botones { display: flex; flex-wrap: wrap; gap: 8px; }
+.dos-botones .boton { flex: 1 1 30%; width: auto; margin-top: 12px; padding: 0 8px; }
 .boton.morado { background: var(--morado); }
 .boton.contorno-azul { background: transparent; color: var(--azul); border: 2px solid var(--azul); }
 .tot { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; }
@@ -132,3 +132,6 @@ textarea:focus { outline: 3px solid rgba(26, 115, 232, .35); border-color: var(-
 .linea-cobro { margin: 6px 0; overflow-wrap: anywhere; }
 .reng-ver[data-recibo] { cursor: pointer; }
 .reng-ver.apagado { opacity: .55; }
+
+/* Compras y existencias */
+.reng-ver.enlace { cursor: pointer; }

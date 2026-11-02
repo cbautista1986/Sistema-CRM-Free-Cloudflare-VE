@@ -4,6 +4,7 @@ import { vistaClientes } from "./clientes.js";
 import { vistaCatalogo } from "./catalogo.js";
 import { vistaFactura } from "./factura.js";
 import { vistaPagos } from "./pagos.js";
+import { vistaCompras, vistaProveedores, vistaExistencias } from "./compras.js";
 
 const NEGOCIO = [
   ["nombre_razon_social", "🏷️ Nombre o razón social"], ["rif", "🪪 RIF o cédula"], ["direccion_fiscal", "📍 Dirección fiscal"],
@@ -70,15 +71,17 @@ function vistaInicio() {
   api("documentos/resumen").then((r) => { // ganancia real del mes (facturas emitidas)
     $("#gan-total").textContent = usd(r.total); $("#gan-det").textContent = `🟣 Servicios: ${usd(r.servicios)} · 🔵 Productos: ${usd(r.productos)}`;
   }).catch(() => {});
-  api("pagos/resumen").then((r) => { // lo que falta por cobrar y lo vencido
+  Promise.all([api("pagos/resumen").catch(() => null), api("existencias/alertas").catch(() => null)]).then(([r, e]) => { // por cobrar, vencido y poco stock
     const t = $("#alertas-txt"); if (!t) return;
     const lineas = [];
-    if (r.vencidas_n) lineas.push(`⚠️ ${r.vencidas_n} factura(s) vencida(s): ${usd(r.vencidas_usd)}`);
-    if (r.por_cobrar_n) lineas.push(`💵 Por cobrar: ${usd(r.por_cobrar_usd)} en ${r.por_cobrar_n} factura(s)`);
+    if (r?.vencidas_n) lineas.push([`⚠️ ${r.vencidas_n} factura(s) vencida(s): ${usd(r.vencidas_usd)}`, "#/pagos"]);
+    if (r?.por_cobrar_n) lineas.push([`💵 Por cobrar: ${usd(r.por_cobrar_usd)} en ${r.por_cobrar_n} factura(s)`, "#/pagos"]);
+    if (e?.agotados) lineas.push([`📦 ${e.agotados} producto(s) agotado(s)`, "#/inventario"]);
+    if (e?.bajos) lineas.push([`🔔 ${e.bajos} producto(s) con poco stock`, "#/inventario"]);
     if (!lineas.length) return;
-    t.innerHTML = lineas.map((x) => `<span class="alerta-linea">${esc(x)}</span>`).join("<br>");
-    t.querySelectorAll(".alerta-linea").forEach((el) => el.addEventListener("click", () => (location.hash = "#/pagos")));
-  }).catch(() => {});
+    t.innerHTML = lineas.map(([x, ir]) => `<span class="alerta-linea" data-ir="${ir}">${esc(x)}</span>`).join("<br>");
+    t.querySelectorAll(".alerta-linea").forEach((el) => el.addEventListener("click", () => (location.hash = el.dataset.ir)));
+  });
 }
 
 function vistaAjustes() {
@@ -131,6 +134,9 @@ async function ruta() {
     if (seccion === "clientes") return await vistaClientes(estado, id);
     if (seccion === "factura") return await vistaFactura(estado, id, extra);
     if (seccion === "pagos") return await vistaPagos(estado, id, extra);
+    if (seccion === "compras") return await vistaCompras(estado, id);
+    if (seccion === "proveedores") return await vistaProveedores(estado, id);
+    if (seccion === "existencias") return await vistaExistencias(estado, id);
     if (seccion === "inventario" || seccion === "catalogo") return await vistaCatalogo(estado, id);
     vistaInicio();
   } catch (e) {
