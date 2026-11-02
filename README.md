@@ -7,6 +7,8 @@ Cloudflare Workers + Hono + D1. Todo funciona en el plan gratis de Cloudflare.
 - **Fase 3:** presupuestos y facturas (IVA, tasa BCV, correlativos, PDF, anulación), modo práctica y respaldo.
 - **Fase 4:** pagos y por cobrar: crédito con días de plazo, cobros en USD y Bs (tasa del día del pago), abonos a presupuestos,
   recibos en PDF, datos de cobro por método y mensajes de WhatsApp.
+- **Fase 5:** proveedores, compras y existencias: costo promedio ponderado, la venta descuenta y se bloquea si no hay existencias,
+  cargas directas, ajustes con motivo, producto «al vuelo» y alertas de poco stock.
 
 ## Dónde editar cada cosa (un módulo = pantallas en `public/` + API en `src/rutas/`)
 | Módulo | Pantallas | API |
@@ -16,6 +18,7 @@ Cloudflare Workers + Hono + D1. Todo funciona en el plan gratis de Cloudflare.
 | Inventario (productos y servicios) | `catalogo.js` | `catalogo.ts` |
 | Factura (presupuestos y facturas) | `factura.js`, `pdf.js` | `documentos.ts` |
 | Pagos, por cobrar, recibos, datos de cobro | `pagos.js`, `pdf.js` | `pagos.ts` |
+| Compras, proveedores y existencias | `compras.js`, `catalogo.js` | `compras.ts`, `proveedores.ts`, `existencias.ts`, `src/stock.ts` |
 | Modo práctica y respaldo | `app.js` (Ajustes) | `sistema.ts` |
 
 - `public/dinero.js` → **toda** la matemática del dinero; la usan el servidor y el navegador (una sola fuente de verdad).
@@ -33,7 +36,12 @@ Cloudflare Workers + Hono + D1. Todo funciona en el plan gratis de Cloudflare.
 7. Las reglas fiscales son **datos**, no código: tabla `parametros_fiscales` (IVA permitido, leyendas del PDF, validez, tope de renglones...)
    con fecha de vigencia. Si la ley cambia, se agrega una migración con filas nuevas (`vigente_desde` = fecha del cambio).
 8. Cambios en la base de datos: **migración nueva al final** de `src/migraciones.ts`; nunca edites una ya desplegada.
-9. El **IGTF no se calcula** todavía: espera la confirmación del contador. Cada pago guarda su método y moneda para poder activarlo después.
+9. Las **existencias nunca se guardan sueltas**: se calculan sumando movimientos (`movimientos_stock`), que no se editan ni se borran
+   (se corrigen con otro movimiento). Costo = promedio ponderado (valor ÷ existencias). Solo las facturas mueven existencias.
+10. Un producto con **control de existencias** no se factura por encima de lo que hay; uno sin control se vende sin límite.
+    Anular una factura devuelve lo que salió, al mismo costo. Una compra solo se anula si después no hubo otros movimientos de sus productos.
+11. Los lotes críticos usan la tabla `verificaciones` como "freno de emergencia": si algo cambió mientras se guardaba, se deshace todo el lote.
+12. El **IGTF no se calcula** todavía: espera la confirmación del contador. Cada pago guarda su método y moneda para poder activarlo después.
 
 ## Modo práctica → modo real
 El sistema arranca en **modo práctica**: los documentos y recibos llevan marca de agua, no valen y tienen numeración aparte.
