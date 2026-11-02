@@ -2,7 +2,8 @@
 // Ciclo de vida: BORRADOR (editable, sin número) -> EMITIDO (número asignado, ya no se modifica) -> ANULADO.
 // Un presupuesto emitido pasa a FACTURADO cuando se emite la factura creada desde él.
 import { Hono } from "hono";
-import { aCantidadMilli, aTasaE8, calcular } from "../../public/dinero.js";
+import { aCantidadMilli, aTasaE8, calcular, cantidadTexto } from "../../public/dinero.js";
+import { guardaSaldo, movimiento, saldos, valorSalida } from "../stock";
 import { PAGADO, aCentavos, auditar, comodin, falla, fechaCaracas, idParam, leerJson, masDias, modoActual, parametrosVigentes, requiereSesion, texto, type Ctx, type Env } from "../comun";
 
 const documentos = new Hono<Env>();
@@ -52,8 +53,14 @@ async function normalizarLineas(c: Ctx, bruto: unknown, permitidas: number[], ma
       if (!it.activo) return `${pos}: «${it.nombre}» está desactivado en el inventario.`;
       tipo = it.tipo; costo = it.costo_centavos; alic = it.alicuota_iva * 100; desc = desc || it.nombre; // el IVA lo manda el inventario
     } else {
-      if (desc.length < 2) return `${pos}: escribe la descripción del servicio.`;
-      alic = Math.round(Number(b.alicuota_iva) * 100); // servicio "al momento": no se guarda en el inventario
+      const alVuelo = texto(b.tipo, 10) === "PRODUCTO";
+      if (desc.length < 2) return `${pos}: escribe la descripción del ${alVuelo ? "producto" : "servicio"}.`;
+      alic = Math.round(Number(b.alicuota_iva) * 100); // servicio o producto "al vuelo": no se guarda en el inventario
+      if (alVuelo) { // equipo que se compra y se vende en el momento: costo y precio, sin pasar por las existencias
+        const c0 = aCentavos(b.costo_usd);
+        if (Number.isNaN(c0)) return `${pos}: el costo no es válido (ejemplo: 8,50).`;
+        tipo = "PRODUCTO"; costo = c0;
+      }
     }
     if (!permitidas.includes(alic)) return `${pos}: el IVA no es válido.`;
     salida.push({ catalogo_id: catId || null, tipo, descripcion: desc, cantidad_milli: cant, precio_usd: precio, costo_usd: costo, alicuota_cent: alic });
@@ -195,7 +202,20 @@ documentos.post("/:id/emitir", async (c) => {
   const reglas = { iva_alicuotas_cent: params.iva_alicuotas_cent, titulo_sin_control: params.titulo_sin_control, leyenda_sin_control: params.leyenda_sin_control,
     leyenda_cambio: params.leyenda_cambio, validez_presupuesto_dias: Number(params.validez_presupuesto_dias ?? 15), plantilla_version: Number(params.plantilla_version ?? 1) };
 
-  // TODO en un solo paso (todo o nada): sumar correlativos, fijar montos en Bs, impuestos y pasar a EMITIDO.
+  // Existencias: los productos con control descuentan lo vendido; si no alcanza, no se emite.
+  const idsProd = [...new Set(lineas.filter((l: Fila) => l.catalogo_id).map((l: Fila) => l.catalogo_id as number))];
+  const salidas = new Map<number, { nombre: string; cant: number }>();
+  if (doc.tipo === "FACTURA" && idsProd.length) { // solo las facturas mueven existencias (un presupuesto no)
+    const { results: ctrl } = await db.prepare(`SELECT id, nombre FROM catalogo WHERE tipo = 'PRODUCTO' AND controla_stock = 1 AND id IN (${idsProd.map(() => "?").join(",")})`).bind(...idsProd).all<Fila>();
+    for (const p of ctrl) salidas.set(p.id, { nombre: p.nombre, cant: lineas.filter((l: Fila) => l.catalogo_id === p.id).reduce((t: number, l: Fila) => t + l.cantidad_milli, 0) });
+  }
+  const sal = await saldos(db, [...salidas.keys()]);
+  for (const [pid, sd] of salidas) {
+    const hay = sal.get(pid)!.stock;
+    if (hay < sd.cant) return falla(c, 409, `No hay existencias suficientes de «${sd.nombre}»: hay ${cantidadTexto(Math.max(hay, 0))} y quieres vender ${cantidadTexto(sd.cant)}.`);
+  }
+
+  // TODO en un solo paso (todo o nada): sumar correlativos, fijar montos en Bs, impuestos, existencias y pasar a EMITIDO.
   const pasos = [db.prepare(`UPDATE contadores SET valor = valor + 1 WHERE clave = ? AND ${sigueBorrador}`).bind(claveNum, id)];
   if (esFactura) pasos.push(db.prepare(`UPDATE contadores SET valor = valor + 1 WHERE clave = ? AND ${sigueBorrador}`).bind(claveCtl, id));
   calc.renglones.forEach((r: Fila, i: number) => pasos.push(
@@ -203,6 +223,10 @@ documentos.post("/:id/emitir", async (c) => {
   calc.impuestos.forEach((x: Fila) => pasos.push(
     db.prepare(`INSERT INTO documento_impuestos (documento_id, alicuota_cent, base_usd, iva_usd, base_bs, iva_bs) VALUES (?, ?, ?, ?, ?, ?)`)
       .bind(id, x.alicuota_cent, x.base_usd, x.iva_usd, x.base_bs, x.iva_bs)));
+  for (const [pid, sd] of salidas) {
+    const saldo = sal.get(pid)!;
+    pasos.push(guardaSaldo(db, pid, saldo), movimiento(db, { producto_id: pid, modo: doc.modo, tipo: "VENTA", cantidad_milli: -sd.cant, valor_usd: -valorSalida(saldo, sd.cant), documento_id: id, fecha, uid: u.id }));
+  }
   const posEmision = pasos.length;
   pasos.push(db.prepare(
     `UPDATE documentos SET estado = 'EMITIDO', numero = (SELECT valor FROM contadores WHERE clave = ?),
@@ -224,6 +248,7 @@ documentos.post("/:id/emitir", async (c) => {
     if (!r[posEmision].meta.changes) return falla(c, 409, "Este documento ya fue emitido.");
   } catch (e) {
     if (/Documento emitido|UNIQUE|PRIMARY KEY/.test(String(e))) return falla(c, 409, "Este documento ya fue emitido.");
+    if (/CHECK constraint failed/.test(String(e))) return falla(c, 409, "Las existencias cambiaron mientras emitías. Revisa y vuelve a intentarlo.");
     throw e;
   }
   const f = await db.prepare(`SELECT numero, control_interno FROM documentos WHERE id = ?`).bind(id).first<Fila>();
@@ -237,10 +262,21 @@ documentos.post("/:id/anular", async (c) => {
   if (motivo.length < 5) return falla(c, 400, "Escribe el motivo de la anulación (mínimo 5 letras).");
   const conPagos = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM pagos WHERE documento_id = ? AND estado = 'VIGENTE'`).bind(id).first<{ n: number }>();
   if (conPagos && conPagos.n > 0) return falla(c, 409, "Este documento tiene pagos registrados: anula primero sus pagos.");
-  const r = await c.env.DB.prepare(
-    `UPDATE documentos SET estado = 'ANULADO', anulado_en = ?, anulado_por = ?, motivo_anulacion = ? WHERE id = ? AND estado = 'EMITIDO'`
-  ).bind(new Date().toISOString(), u.id, motivo, id).run();
-  if (!r.meta.changes) return falla(c, 409, "Solo se puede anular un documento emitido (no un borrador, ni uno ya anulado o facturado).");
+  const db = c.env.DB;
+  const rr = await db.batch([
+    db.prepare(`UPDATE documentos SET estado = 'ANULADO', anulado_en = ?, anulado_por = ?, motivo_anulacion = ? WHERE id = ? AND estado = 'EMITIDO'`).bind(new Date().toISOString(), u.id, motivo, id),
+    // lo que salió de existencias con esta factura vuelve, al mismo costo con el que salió (una sola vez)
+    db.prepare(`INSERT INTO movimientos_stock (producto_id, modo, tipo, cantidad_milli, valor_usd, documento_id, nota, fecha, creado_en, creado_por)
+      SELECT m.producto_id, m.modo, 'DEVOLUCION_VENTA', -m.cantidad_milli, -m.valor_usd, m.documento_id, 'Factura anulada', ?, ?, ?
+      FROM movimientos_stock m WHERE m.documento_id = ? AND m.tipo = 'VENTA'
+        AND EXISTS (SELECT 1 FROM documentos WHERE id = ? AND estado = 'ANULADO')
+        AND NOT EXISTS (SELECT 1 FROM movimientos_stock r WHERE r.documento_id = m.documento_id AND r.producto_id = m.producto_id AND r.tipo = 'DEVOLUCION_VENTA')`
+    ).bind(fechaCaracas(), new Date().toISOString(), u.id, id, id),
+    db.prepare(`UPDATE catalogo SET costo_centavos = (SELECT CASE WHEN SUM(m.cantidad_milli) > 0 THEN (SUM(m.valor_usd) * 2000 + SUM(m.cantidad_milli)) / (2 * SUM(m.cantidad_milli))
+      ELSE catalogo.costo_centavos END FROM movimientos_stock m WHERE m.producto_id = catalogo.id)
+      WHERE id IN (SELECT producto_id FROM movimientos_stock WHERE documento_id = ? AND tipo = 'DEVOLUCION_VENTA')`).bind(id),
+  ]);
+  if (!rr[0].meta.changes) return falla(c, 409, "Solo se puede anular un documento emitido (no un borrador, ni uno ya anulado o facturado).");
   await auditar(c, u.id, "DOC_ANULAR", `${id}: ${motivo}`);
   return c.json({ ok: true });
 });

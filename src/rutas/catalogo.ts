@@ -1,11 +1,13 @@
 // Módulo CATÁLOGO (servicios y productos): /api/catalogo
 import { Hono } from "hono";
+import { aCantidadMilli } from "../../public/dinero.js";
 import { aCentavos, auditar, comodin, esForanea, esUnico, falla, idParam, leerJson, requiereSesion, texto, type Env } from "../comun";
 
 const catalogo = new Hono<Env>();
 catalogo.use("*", requiereSesion);
 
-const COLUMNAS = "id, codigo, nombre, tipo, costo_centavos, precio_centavos, alicuota_iva, activo";
+const COLUMNAS = "id, codigo, nombre, tipo, costo_centavos, precio_centavos, alicuota_iva, activo, controla_stock, stock_minimo_milli, " +
+  "(SELECT COALESCE(SUM(m.cantidad_milli), 0) FROM movimientos_stock m WHERE m.producto_id = catalogo.id) AS stock_milli";
 const TIPOS = ["SERVICIO", "PRODUCTO"], IVAS = [0, 8, 16];
 
 function validar(b: Record<string, unknown>) {
@@ -18,7 +20,11 @@ function validar(b: Record<string, unknown>) {
   if (Number.isNaN(costo) || Number.isNaN(precio)) return "Escribe los montos solo con números (ejemplo: 12,50).";
   if (tipo === "PRODUCTO" && !precio) return "Un producto necesita su precio de venta.";
   if (!IVAS.includes(iva)) return "El IVA no es válido.";
-  return { nombre, tipo, codigo, costo, precio, iva, activo }; // precio vacío en un servicio = "se define al facturar"
+  // Existencias: solo los productos las controlan. Si no se dice nada: al crear queda sin control; al editar se conserva lo que había.
+  const cs = b.controla_stock, minimo = aCantidadMilli(b.stock_minimo);
+  if (Number.isNaN(minimo)) return "El mínimo de existencias no es válido (ejemplo: 5).";
+  const controla = tipo !== "PRODUCTO" ? 0 : cs === undefined ? undefined : String(cs) === "0" || cs === false ? 0 : 1;
+  return { nombre, tipo, codigo, costo, precio, iva, activo, controla, minimo: tipo === "PRODUCTO" ? minimo : null }; // precio vacío en un servicio = "se define al facturar"
 }
 
 catalogo.get("/", async (c) => {
@@ -41,8 +47,8 @@ catalogo.post("/", async (c) => {
   if (typeof v === "string") return falla(c, 400, v);
   try {
     const r = await c.env.DB.prepare(
-      `INSERT INTO catalogo (codigo, nombre, tipo, costo_centavos, precio_centavos, alicuota_iva, activo) VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(v.codigo, v.nombre, v.tipo, v.costo, v.precio, v.iva, v.activo).run();
+      `INSERT INTO catalogo (codigo, nombre, tipo, costo_centavos, precio_centavos, alicuota_iva, activo, controla_stock, stock_minimo_milli) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(v.codigo, v.nombre, v.tipo, v.costo, v.precio, v.iva, v.activo, v.controla ?? 0, v.minimo).run();
     await auditar(c, c.get("usuario").id, "CATALOGO_CREAR", v.nombre);
     return c.json({ ok: true, id: r.meta.last_row_id });
   } catch (e) {
@@ -54,10 +60,13 @@ catalogo.post("/", async (c) => {
 catalogo.put("/:id", async (c) => {
   const id = idParam(c), v = validar(await leerJson(c));
   if (typeof v === "string") return falla(c, 400, v);
+  const mov = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM movimientos_stock WHERE producto_id = ?`).bind(id).first<{ n: number }>();
+  if (mov && mov.n > 0 && (v.controla === 0 || v.tipo !== "PRODUCTO")) return falla(c, 409, "Este producto ya tiene movimientos de existencias: no se puede apagar el control ni convertirlo en servicio.");
   try {
     const r = await c.env.DB.prepare(
-      `UPDATE catalogo SET codigo = ?, nombre = ?, tipo = ?, costo_centavos = ?, precio_centavos = ?, alicuota_iva = ?, activo = ? WHERE id = ?`
-    ).bind(v.codigo, v.nombre, v.tipo, v.costo, v.precio, v.iva, v.activo, id).run();
+      `UPDATE catalogo SET codigo = ?, nombre = ?, tipo = ?, costo_centavos = ?, precio_centavos = ?, alicuota_iva = ?, activo = ?,
+         controla_stock = COALESCE(?, controla_stock), stock_minimo_milli = ? WHERE id = ?`
+    ).bind(v.codigo, v.nombre, v.tipo, v.costo, v.precio, v.iva, v.activo, v.controla ?? null, v.minimo, id).run();
     if (!r.meta.changes) return falla(c, 404, "No encontrado.");
     await auditar(c, c.get("usuario").id, "CATALOGO_EDITAR", `${id} ${v.nombre}`);
     return c.json({ ok: true });

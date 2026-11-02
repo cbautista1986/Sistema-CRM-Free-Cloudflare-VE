@@ -16,6 +16,8 @@ sistema.post("/salir-en-vivo", async (c) => {
   if ((await modoActual(db)) !== "PRACTICA") return falla(c, 409, "El sistema ya está en vivo.");
   await db.batch([
     db.prepare(`DELETE FROM pagos WHERE modo = 'PRACTICA'`),
+    db.prepare(`DELETE FROM movimientos_stock WHERE modo = 'PRACTICA'`),
+    db.prepare(`DELETE FROM compras WHERE modo = 'PRACTICA'`),
     db.prepare(`DELETE FROM documento_impuestos WHERE documento_id IN (SELECT id FROM documentos WHERE modo = 'PRACTICA')`),
     db.prepare(`DELETE FROM documento_renglones WHERE documento_id IN (SELECT id FROM documentos WHERE modo = 'PRACTICA')`),
     db.prepare(`UPDATE documentos SET presupuesto_id = NULL WHERE modo = 'PRACTICA'`),
@@ -25,6 +27,7 @@ sistema.post("/salir-en-vivo", async (c) => {
     db.prepare(`UPDATE contadores SET valor = ? WHERE clave = 'CONTROL:REAL'`).bind(k - 1),
     db.prepare(`UPDATE contadores SET valor = ? WHERE clave = 'PRESUPUESTO:REAL'`).bind(p - 1),
     db.prepare(`UPDATE contadores SET valor = ? WHERE clave = 'RECIBO:REAL'`).bind(rec - 1),
+    db.prepare(`UPDATE catalogo SET controla_stock = 0 WHERE controla_stock = 1 AND NOT EXISTS (SELECT 1 FROM movimientos_stock m WHERE m.producto_id = catalogo.id)`),
     db.prepare(`UPDATE ajustes SET valor = 'REAL' WHERE clave = 'modo'`),
   ]);
   await auditar(c, c.get("usuario").id, "SALIR_EN_VIVO", `factura ${f}, control ${k}, presupuesto ${p}`);
@@ -32,7 +35,7 @@ sistema.post("/salir-en-vivo", async (c) => {
 });
 
 // Copia completa de los datos (sin contraseñas ni sesiones) para guardarla fuera del sistema.
-const TABLAS = ["perfil_emisor", "clientes", "catalogo", "documentos", "documento_renglones", "documento_impuestos", "pagos", "metodos_cobro", "contadores", "parametros_fiscales", "ajustes", "auditoria"];
+const TABLAS = ["perfil_emisor", "clientes", "catalogo", "documentos", "documento_renglones", "documento_impuestos", "pagos", "metodos_cobro", "proveedores", "compras", "movimientos_stock", "contadores", "parametros_fiscales", "ajustes", "auditoria"];
 sistema.get("/respaldo", async (c) => {
   const datos: Record<string, unknown> = { generado_en: new Date().toISOString(), version: 1 };
   for (const t of TABLAS) datos[t] = (await c.env.DB.prepare(`SELECT * FROM ${t}`).all()).results;
