@@ -20,6 +20,13 @@ async function protegerDocumentosViejos(db: D1Database) {
   }
 }
 
+// El instalador viejo (Gemini) dejó una tabla "compras" con otra forma. NO se borra: se aparta como "compras_vieja" (con sus datos, si los hubiera)
+// para poder crear la tabla nueva sin perder nada.
+async function apartarComprasViejas(db: D1Database) {
+  const t = await db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'compras'`).first<{ sql: string }>();
+  if (t && t.sql.includes("num_factura_compra")) await db.prepare(`ALTER TABLE compras RENAME TO compras_vieja`).run();
+}
+
 export const MIGRACIONES: Migracion[] = [
   {
     id: "0001_base",
@@ -321,6 +328,71 @@ export const MIGRACIONES: Migracion[] = [
       // Lo que ya habías escrito en Ajustes se conserva como nota del método.
       `UPDATE metodos_cobro SET activo = 1, datos_json = json_object('nota', (SELECT datos_paypal FROM perfil_emisor WHERE id = 1))
         WHERE metodo = 'PAYPAL' AND (SELECT COALESCE(datos_paypal, '') FROM perfil_emisor WHERE id = 1) <> ''`,
+    ],
+  },
+  {
+    id: "0006_existencias",
+    antes: apartarComprasViejas,
+    sql: [
+      // Control de existencias por producto. Los productos que ya tienes quedan SIN control (nada de lo que vendes hoy se bloquea)
+      // hasta que cargues su cantidad; al registrar una compra o una carga, el producto pasa a controlarse.
+      `ALTER TABLE catalogo ADD COLUMN controla_stock INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE catalogo ADD COLUMN stock_minimo_milli INTEGER`,
+      // Truco de seguridad: insertar aquí una fila con ok = 0 falla a propósito y deshace TODO el lote (todo o nada).
+      `CREATE TABLE verificaciones (ok INTEGER NOT NULL CHECK (ok = 1))`,
+      `CREATE TABLE proveedores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rif TEXT NOT NULL UNIQUE,
+        nombre TEXT NOT NULL,
+        direccion TEXT, whatsapp TEXT, email TEXT,
+        creado_en TEXT DEFAULT (datetime('now')))`,
+      // Factura de compra del proveedor. Los renglones quedan dentro de la compra (renglones_json) y no se pueden cambiar.
+      `CREATE TABLE compras (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        modo TEXT NOT NULL CHECK (modo IN ('PRACTICA', 'REAL')),
+        proveedor_id INTEGER NOT NULL REFERENCES proveedores(id),
+        proveedor_rif TEXT NOT NULL, proveedor_nombre TEXT NOT NULL,
+        factura_numero TEXT NOT NULL, control_numero TEXT,
+        fecha TEXT NOT NULL,
+        estado TEXT NOT NULL DEFAULT 'REGISTRADA' CHECK (estado IN ('REGISTRADA', 'ANULADA')),
+        subtotal_usd INTEGER NOT NULL, iva_usd INTEGER NOT NULL, total_usd INTEGER NOT NULL,
+        nota TEXT, renglones_json TEXT NOT NULL,
+        registrado_en TEXT NOT NULL, registrado_por INTEGER,
+        anulado_en TEXT, anulado_por INTEGER, motivo_anulacion TEXT)`,
+      `CREATE UNIQUE INDEX idx_compra_factura ON compras(proveedor_id, factura_numero) WHERE estado = 'REGISTRADA'`,
+      // Libro de existencias: cada entrada o salida es un movimiento que NUNCA se edita ni se borra (se corrige con otro).
+      // Existencias = suma de cantidades; valor = suma de valores; costo promedio = valor / existencias.
+      `CREATE TABLE movimientos_stock (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        producto_id INTEGER NOT NULL REFERENCES catalogo(id),
+        modo TEXT NOT NULL CHECK (modo IN ('PRACTICA', 'REAL')),
+        tipo TEXT NOT NULL CHECK (tipo IN ('COMPRA', 'CARGA', 'VENTA', 'DEVOLUCION_VENTA', 'ANULACION_COMPRA', 'AJUSTE')),
+        motivo TEXT CHECK (motivo IS NULL OR motivo IN ('DANADO', 'PERDIDO', 'GARANTIA', 'USO_INTERNO', 'SOBRANTE')),
+        cantidad_milli INTEGER NOT NULL CHECK (cantidad_milli <> 0),
+        valor_usd INTEGER NOT NULL,
+        documento_id INTEGER REFERENCES documentos(id),
+        compra_id INTEGER REFERENCES compras(id),
+        nota TEXT,
+        fecha TEXT NOT NULL, creado_en TEXT NOT NULL, creado_por INTEGER)`,
+      `CREATE INDEX idx_mov_producto ON movimientos_stock(producto_id)`,
+      `CREATE INDEX idx_mov_documento ON movimientos_stock(documento_id)`,
+      `CREATE TRIGGER mov_no_cambiar BEFORE UPDATE ON movimientos_stock WHEN old.modo = 'REAL'
+        BEGIN SELECT RAISE(ABORT, 'Un movimiento de existencias no se modifica: se corrige con otro movimiento.'); END`,
+      `CREATE TRIGGER mov_no_borrar BEFORE DELETE ON movimientos_stock WHEN old.modo = 'REAL'
+        BEGIN SELECT RAISE(ABORT, 'Un movimiento de existencias no se borra: se corrige con otro movimiento.'); END`,
+      `CREATE TRIGGER compra_no_borrar BEFORE DELETE ON compras WHEN old.modo = 'REAL'
+        BEGIN SELECT RAISE(ABORT, 'Una compra registrada no se borra: se anula.'); END`,
+      `CREATE TRIGGER compra_inmutable BEFORE UPDATE ON compras
+        WHEN old.modo = 'REAL' AND (
+          old.estado = 'ANULADA'
+          OR new.estado NOT IN ('REGISTRADA', 'ANULADA')
+          OR new.modo IS NOT old.modo OR new.proveedor_id IS NOT old.proveedor_id OR new.proveedor_rif IS NOT old.proveedor_rif
+          OR new.proveedor_nombre IS NOT old.proveedor_nombre OR new.factura_numero IS NOT old.factura_numero OR new.control_numero IS NOT old.control_numero
+          OR new.fecha IS NOT old.fecha OR new.subtotal_usd IS NOT old.subtotal_usd OR new.iva_usd IS NOT old.iva_usd OR new.total_usd IS NOT old.total_usd
+          OR new.nota IS NOT old.nota OR new.renglones_json IS NOT old.renglones_json OR new.registrado_en IS NOT old.registrado_en OR new.registrado_por IS NOT old.registrado_por)
+        BEGIN SELECT RAISE(ABORT, 'Compra registrada: solo se puede anular.'); END`,
+      `INSERT INTO parametros_fiscales (clave, vigente_desde, valor, nota) VALUES
+        ('motivos_ajuste', '2000-01-01', 'DANADO,PERDIDO,GARANTIA,USO_INTERNO,SOBRANTE', 'Motivos permitidos para ajustar existencias')`,
     ],
   },
 ];
