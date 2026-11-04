@@ -135,3 +135,17 @@ textarea:focus { outline: 3px solid rgba(26, 115, 232, .35); border-color: var(-
 
 /* Compras y existencias */
 .reng-ver.enlace { cursor: pointer; }
+
+/* Informes (Fase 6): tablas que se desplazan de lado en el celular, resumen en rejilla */
+.tabla-scroll { overflow-x: auto; margin: 0 -8px; padding: 0 8px; -webkit-overflow-scrolling: touch; }
+table.informe { border-collapse: collapse; font-size: 13px; white-space: nowrap; min-width: 100%; }
+table.informe th, table.informe td { padding: 6px 8px; border-bottom: 1px solid var(--borde); text-align: left; }
+table.informe thead th { color: var(--suave); font-weight: 600; font-size: 12px; position: sticky; top: 0; background: var(--tarjeta); }
+table.informe .der { text-align: right; font-variant-numeric: tabular-nums; }
+table.informe tr.total th, table.informe tr.total td { font-weight: 700; border-top: 2px solid var(--borde); }
+table.informe tr.anulada td { color: var(--rojo); text-decoration: line-through; }
+.res-rejilla { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+.res { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.res strong { font-size: 18px; overflow-wrap: anywhere; }
+.dos-botones { display: flex; gap: 10px; margin-top: 8px; }
+.dos-botones .boton { flex: 1; }

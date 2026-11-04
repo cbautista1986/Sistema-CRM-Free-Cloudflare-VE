@@ -5,6 +5,7 @@ import { vistaCatalogo } from "./catalogo.js";
 import { vistaFactura } from "./factura.js";
 import { vistaPagos } from "./pagos.js";
 import { vistaCompras, vistaProveedores, vistaExistencias } from "./compras.js";
+import { vistaInformes } from "./informes.js";
 
 const NEGOCIO = [
   ["nombre_razon_social", "🏷️ Nombre o razón social"], ["rif", "🪪 RIF o cédula"], ["direccion_fiscal", "📍 Dirección fiscal"],
@@ -52,7 +53,7 @@ function vistaInicio() {
         <button class="boton chico verde" type="submit">Guardar</button>
         <button class="boton chico contorno" type="button" id="tasa-cancelar" aria-label="Cancelar">✕</button>${ERROR}</form>
     </section>
-    <section class="tarjeta ganancia" data-destino="Fase 6" data-nombre="Informes" data-ayuda="Informes de ventas y ganancias"><span class="etiqueta">💰 TU GANANCIA NETA (ESTE MES)</span><strong id="gan-total">$ 0,00</strong>
+    <section class="tarjeta ganancia" data-destino="#/informes" data-nombre="Informes" data-ayuda="Informes para el contador: ventas, compras, ganancias, por cobrar e inventario"><span class="etiqueta">💰 TU GANANCIA NETA (ESTE MES)</span><strong id="gan-total">$ 0,00</strong>
       <small class="suave" id="gan-det">🟣 Servicios: $0 · 🔵 Productos: $0</small></section>
     <div class="rejilla">
       <button class="accion azul" data-destino="#/factura" data-nombre="Factura" data-ayuda="Presupuestos y facturas"><span>🧾</span>Factura<small>Presupuestos y facturas</small></button>
@@ -137,6 +138,7 @@ async function ruta() {
     if (seccion === "compras") return await vistaCompras(estado, id);
     if (seccion === "proveedores") return await vistaProveedores(estado, id);
     if (seccion === "existencias") return await vistaExistencias(estado, id);
+    if (seccion === "informes") return await vistaInformes(estado, id);
     if (seccion === "inventario" || seccion === "catalogo") return await vistaCatalogo(estado, id);
     vistaInicio();
   } catch (e) {
