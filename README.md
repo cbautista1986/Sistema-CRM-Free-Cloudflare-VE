@@ -9,6 +9,8 @@ Cloudflare Workers + Hono + D1. Todo funciona en el plan gratis de Cloudflare.
   recibos en PDF, datos de cobro por método y mensajes de WhatsApp.
 - **Fase 5:** proveedores, compras y existencias: costo promedio ponderado, la venta descuenta y se bloquea si no hay existencias,
   cargas directas, ajustes con motivo, producto «al vuelo» y alertas de poco stock.
+- **Fase 6:** informes para el contador (solo lectura): libro de ventas (Bs, por alícuota), libro de compras (USD), ganancias, cuentas por cobrar con
+  antigüedad e inventario valorizado. Se abren desde la tarjeta de ganancia de Inicio y se descargan en CSV (Excel) y PDF.
 
 ## Dónde editar cada cosa (un módulo = pantallas en `public/` + API en `src/rutas/`)
 | Módulo | Pantallas | API |
@@ -19,6 +21,7 @@ Cloudflare Workers + Hono + D1. Todo funciona en el plan gratis de Cloudflare.
 | Factura (presupuestos y facturas) | `factura.js`, `pdf.js` | `documentos.ts` |
 | Pagos, por cobrar, recibos, datos de cobro | `pagos.js`, `pdf.js` | `pagos.ts` |
 | Compras, proveedores y existencias | `compras.js`, `catalogo.js` | `compras.ts`, `proveedores.ts`, `existencias.ts`, `src/stock.ts` |
+| Informes (libros, ganancias, por cobrar, inventario) | `informes.js`, `informe-tabla.js` | `informes.ts` |
 | Modo práctica y respaldo | `app.js` (Ajustes) | `sistema.ts` |
 
 - `public/dinero.js` → **toda** la matemática del dinero; la usan el servidor y el navegador (una sola fuente de verdad).
