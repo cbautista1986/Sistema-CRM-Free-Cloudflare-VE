@@ -395,6 +395,42 @@ export const MIGRACIONES: Migracion[] = [
         ('motivos_ajuste', '2000-01-01', 'DANADO,PERDIDO,GARANTIA,USO_INTERNO,SOBRANTE', 'Motivos permitidos para ajustar existencias')`,
     ],
   },
+  {
+    // Fase 6.1: las compras guardan la tasa BCV de la fecha de la factura y sus montos en bolívares (libro de compras legal, en Bs).
+    // Las compras anteriores quedan con estos campos vacíos a propósito: NO se les inventa una tasa (en modo real no se pueden tocar).
+    id: "0007_compras_bs",
+    sql: [
+      `ALTER TABLE compras ADD COLUMN tasa_e8 INTEGER`,
+      `ALTER TABLE compras ADD COLUMN subtotal_bs INTEGER`,
+      `ALTER TABLE compras ADD COLUMN iva_bs INTEGER`,
+      `ALTER TABLE compras ADD COLUMN total_bs INTEGER`,
+      // Base e IVA por alícuota de cada compra (igual que documento_impuestos en las ventas): de aquí sale el libro de compras
+      `CREATE TABLE compra_impuestos (
+        compra_id INTEGER NOT NULL REFERENCES compras(id),
+        alicuota_cent INTEGER NOT NULL,
+        base_usd INTEGER NOT NULL, iva_usd INTEGER NOT NULL,
+        base_bs INTEGER NOT NULL, iva_bs INTEGER NOT NULL,
+        PRIMARY KEY (compra_id, alicuota_cent))`,
+      `CREATE TRIGGER compra_impuestos_no_cambiar BEFORE UPDATE ON compra_impuestos
+        WHEN (SELECT modo FROM compras WHERE id = old.compra_id) = 'REAL'
+        BEGIN SELECT RAISE(ABORT, 'Compra registrada: sus impuestos no se pueden cambiar.'); END`,
+      `CREATE TRIGGER compra_impuestos_no_borrar BEFORE DELETE ON compra_impuestos
+        WHEN (SELECT modo FROM compras WHERE id = old.compra_id) = 'REAL'
+        BEGIN SELECT RAISE(ABORT, 'Compra registrada: sus impuestos no se pueden borrar.'); END`,
+      // La tasa y los montos en Bs también quedan protegidos: se vuelve a crear el candado de compras con las columnas nuevas
+      `DROP TRIGGER compra_inmutable`,
+      `CREATE TRIGGER compra_inmutable BEFORE UPDATE ON compras
+        WHEN old.modo = 'REAL' AND (
+          old.estado = 'ANULADA'
+          OR new.estado NOT IN ('REGISTRADA', 'ANULADA')
+          OR new.modo IS NOT old.modo OR new.proveedor_id IS NOT old.proveedor_id OR new.proveedor_rif IS NOT old.proveedor_rif
+          OR new.proveedor_nombre IS NOT old.proveedor_nombre OR new.factura_numero IS NOT old.factura_numero OR new.control_numero IS NOT old.control_numero
+          OR new.fecha IS NOT old.fecha OR new.subtotal_usd IS NOT old.subtotal_usd OR new.iva_usd IS NOT old.iva_usd OR new.total_usd IS NOT old.total_usd
+          OR new.tasa_e8 IS NOT old.tasa_e8 OR new.subtotal_bs IS NOT old.subtotal_bs OR new.iva_bs IS NOT old.iva_bs OR new.total_bs IS NOT old.total_bs
+          OR new.nota IS NOT old.nota OR new.renglones_json IS NOT old.renglones_json OR new.registrado_en IS NOT old.registrado_en OR new.registrado_por IS NOT old.registrado_por)
+        BEGIN SELECT RAISE(ABORT, 'Compra registrada: solo se puede anular.'); END`,
+    ],
+  },
 ];
 
 export async function migrar(db: D1Database) {
