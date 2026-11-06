@@ -9,8 +9,9 @@ Cloudflare Workers + Hono + D1. Todo funciona en el plan gratis de Cloudflare.
   recibos en PDF, datos de cobro por método y mensajes de WhatsApp.
 - **Fase 5:** proveedores, compras y existencias: costo promedio ponderado, la venta descuenta y se bloquea si no hay existencias,
   cargas directas, ajustes con motivo, producto «al vuelo» y alertas de poco stock.
-- **Fase 6:** informes para el contador (solo lectura): libro de ventas (Bs, por alícuota), libro de compras (USD), ganancias, cuentas por cobrar con
-  antigüedad e inventario valorizado. Se abren desde la tarjeta de ganancia de Inicio y se descargan en CSV (Excel) y PDF.
+- **Fase 6:** informes para el contador (solo lectura): libro de ventas y libro de compras (ambos en Bs, por alícuota), resumen mensual de IVA
+  (débito menos crédito fiscal), ganancias, cuentas por cobrar con antigüedad e inventario valorizado. Las compras guardan la tasa BCV de la fecha
+  de su factura (las anteriores a la migración 0007 quedan sin Bs, no se les inventa tasa). Se abren desde la tarjeta de ganancia de Inicio y se descargan en CSV (Excel) y PDF.
 
 ## Dónde editar cada cosa (un módulo = pantallas en `public/` + API en `src/rutas/`)
 | Módulo | Pantallas | API |
