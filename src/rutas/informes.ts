@@ -1,4 +1,4 @@
-// Módulo INFORMES (Fase 6): libros de ventas y compras, ganancias, por cobrar, inventario valorizado: /api/informes
+// Módulo INFORMES (Fase 6): libros de ventas y compras, resumen mensual de IVA, ganancias, por cobrar, inventario valorizado: /api/informes
 // SOLO LECTURA: ningún informe escribe en la base. Todo sale de los mismos datos que ya guardan los demás módulos
 // (el saldo y las existencias se calculan, no se guardan). Solo se incluyen documentos del modo actual (práctica o real).
 import { Hono } from "hono";
@@ -48,16 +48,59 @@ informes.get("/ventas", async (c) => {
     total_bs: suma(vigentes, "total_bs"), total_usd: suma(vigentes, "total_usd") });
 });
 
-// ---------------------------------------------------------------- libro de compras (USD tal como se registró; no hay tasa por compra)
+// ---------------------------------------------------------------- libro de compras (Bs con la tasa de la fecha de la factura; USD como referencia)
+// Las compras registradas antes de que se guardara la tasa (tasa_e8 vacía) salen sin montos en Bs: no se les inventa una tasa.
 informes.get("/compras", async (c) => {
   const r = rango(c); if (typeof r === "string") return falla(c, 400, r);
-  const modo = await modoActual(c.env.DB);
-  const { results } = await c.env.DB.prepare(
-    `SELECT id, fecha, proveedor_rif, proveedor_nombre, factura_numero, control_numero, estado, subtotal_usd, iva_usd, total_usd
-     FROM compras WHERE modo = ? AND fecha BETWEEN ? AND ? ORDER BY fecha, id`).bind(modo, r.desde, r.hasta).all<Fila>();
-  const vigentes = results.filter((f) => f.estado === "REGISTRADA");
-  return c.json({ ok: true, modo, desde: r.desde, hasta: r.hasta, filas: results, n_vigentes: vigentes.length, n_anuladas: results.length - vigentes.length,
+  const modo = await modoActual(c.env.DB), db = c.env.DB;
+  const [docs, imp] = await Promise.all([
+    db.prepare(`SELECT id, fecha, proveedor_rif, proveedor_nombre, factura_numero, control_numero, estado, tasa_e8, subtotal_usd, iva_usd, total_usd, subtotal_bs, iva_bs, total_bs
+        FROM compras WHERE modo = ? AND fecha BETWEEN ? AND ? ORDER BY fecha, id`).bind(modo, r.desde, r.hasta).all<Fila>(),
+    db.prepare(`SELECT i.compra_id, i.alicuota_cent, i.base_bs, i.iva_bs FROM compra_impuestos i JOIN compras c ON c.id = i.compra_id
+        WHERE c.modo = ? AND c.fecha BETWEEN ? AND ?`).bind(modo, r.desde, r.hasta).all<Fila>(),
+  ]);
+  const porCompra = new Map<number, Fila[]>();
+  for (const i of imp.results) porCompra.set(i.compra_id, [...(porCompra.get(i.compra_id) ?? []), i]);
+  const filas: Fila[] = docs.results.map((d) => ({ ...d, impuestos: (porCompra.get(d.id) ?? []).map((i) => ({ alicuota_cent: i.alicuota_cent, base_bs: i.base_bs, iva_bs: i.iva_bs })) }));
+  const vigentes = filas.filter((f) => f.estado === "REGISTRADA"), porAlicuota = new Map<number, { base_bs: number; iva_bs: number }>();
+  for (const f of vigentes) for (const i of f.impuestos) {
+    const t = porAlicuota.get(i.alicuota_cent) ?? { base_bs: 0, iva_bs: 0 };
+    porAlicuota.set(i.alicuota_cent, { base_bs: t.base_bs + i.base_bs, iva_bs: t.iva_bs + i.iva_bs });
+  }
+  const alicuotas = [...porAlicuota].sort((a, b) => a[0] - b[0]).map(([alicuota_cent, t]) => ({ alicuota_cent, ...t }));
+  return c.json({ ok: true, modo, desde: r.desde, hasta: r.hasta, filas, alicuotas, n_vigentes: vigentes.length, n_anuladas: filas.length - vigentes.length,
+    n_sin_tasa: vigentes.filter((f) => f.tasa_e8 == null).length,
+    subtotal_bs: suma(vigentes, "subtotal_bs"), iva_bs: suma(vigentes, "iva_bs"), total_bs: suma(vigentes, "total_bs"),
     subtotal_usd: suma(vigentes, "subtotal_usd"), iva_usd: suma(vigentes, "iva_usd"), total_usd: suma(vigentes, "total_usd") });
+});
+
+// ---------------------------------------------------------------- resumen mensual de IVA: débito fiscal (ventas) - crédito fiscal (compras), en Bs
+// Es una GUÍA para el contador, no la declaración: no incluye retenciones, excedentes de meses anteriores ni notas de crédito o débito.
+informes.get("/resumen-iva", async (c) => {
+  const r = rango(c); if (typeof r === "string") return falla(c, 400, r);
+  const modo = await modoActual(c.env.DB), db = c.env.DB;
+  const [ventas, compras, sinTasa] = await Promise.all([
+    db.prepare(`SELECT substr(d.fecha_emision, 1, 7) AS mes, SUM(CASE WHEN i.alicuota_cent > 0 THEN i.base_bs ELSE 0 END) AS gravadas_bs,
+        SUM(CASE WHEN i.alicuota_cent = 0 THEN i.base_bs ELSE 0 END) AS exentas_bs, SUM(i.iva_bs) AS iva_bs
+        FROM documento_impuestos i JOIN documentos d ON d.id = i.documento_id
+        WHERE d.tipo = 'FACTURA' AND d.estado = 'EMITIDO' AND d.modo = ? AND d.fecha_emision BETWEEN ? AND ? GROUP BY mes`).bind(modo, r.desde, r.hasta).all<Fila>(),
+    db.prepare(`SELECT substr(c.fecha, 1, 7) AS mes, SUM(CASE WHEN i.alicuota_cent > 0 THEN i.base_bs ELSE 0 END) AS gravadas_bs,
+        SUM(CASE WHEN i.alicuota_cent = 0 THEN i.base_bs ELSE 0 END) AS exentas_bs, SUM(i.iva_bs) AS iva_bs
+        FROM compra_impuestos i JOIN compras c ON c.id = i.compra_id
+        WHERE c.estado = 'REGISTRADA' AND c.modo = ? AND c.fecha BETWEEN ? AND ? GROUP BY mes`).bind(modo, r.desde, r.hasta).all<Fila>(),
+    db.prepare(`SELECT substr(fecha, 1, 7) AS mes, COUNT(*) AS n FROM compras WHERE estado = 'REGISTRADA' AND tasa_e8 IS NULL AND modo = ? AND fecha BETWEEN ? AND ? GROUP BY mes`)
+      .bind(modo, r.desde, r.hasta).all<Fila>(),
+  ]);
+  const V = new Map(ventas.results.map((x) => [x.mes, x])), C = new Map(compras.results.map((x) => [x.mes, x])), S = new Map(sinTasa.results.map((x) => [x.mes, x.n]));
+  const meses = [...new Set([...V.keys(), ...C.keys(), ...S.keys()])].sort();
+  const filas = meses.map((mes) => {
+    const v = V.get(mes) ?? {}, k = C.get(mes) ?? {}, debito_bs = v.iva_bs ?? 0, credito_bs = k.iva_bs ?? 0;
+    return { mes, ventas_gravadas_bs: v.gravadas_bs ?? 0, ventas_exentas_bs: v.exentas_bs ?? 0, debito_bs, compras_gravadas_bs: k.gravadas_bs ?? 0, compras_exentas_bs: k.exentas_bs ?? 0,
+      credito_bs, diferencia_bs: debito_bs - credito_bs, compras_sin_tasa: S.get(mes) ?? 0 };
+  });
+  const t = (k: string) => suma(filas, k);
+  return c.json({ ok: true, modo, desde: r.desde, hasta: r.hasta, filas, total: { ventas_gravadas_bs: t("ventas_gravadas_bs"), ventas_exentas_bs: t("ventas_exentas_bs"), debito_bs: t("debito_bs"),
+    compras_gravadas_bs: t("compras_gravadas_bs"), compras_exentas_bs: t("compras_exentas_bs"), credito_bs: t("credito_bs"), diferencia_bs: t("diferencia_bs"), compras_sin_tasa: t("compras_sin_tasa") } });
 });
 
 // ---------------------------------------------------------------- ganancias (privadas: solo para el dueño)

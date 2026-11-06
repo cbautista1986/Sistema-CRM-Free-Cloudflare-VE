@@ -17,6 +17,7 @@ sistema.post("/salir-en-vivo", async (c) => {
   await db.batch([
     db.prepare(`DELETE FROM pagos WHERE modo = 'PRACTICA'`),
     db.prepare(`DELETE FROM movimientos_stock WHERE modo = 'PRACTICA'`),
+    db.prepare(`DELETE FROM compra_impuestos WHERE compra_id IN (SELECT id FROM compras WHERE modo = 'PRACTICA')`),
     db.prepare(`DELETE FROM compras WHERE modo = 'PRACTICA'`),
     db.prepare(`DELETE FROM documento_impuestos WHERE documento_id IN (SELECT id FROM documentos WHERE modo = 'PRACTICA')`),
     db.prepare(`DELETE FROM documento_renglones WHERE documento_id IN (SELECT id FROM documentos WHERE modo = 'PRACTICA')`),

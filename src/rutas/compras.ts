@@ -2,7 +2,7 @@
 // Al registrar una compra entran existencias (promedio ponderado). Una compra no se edita ni se borra: se anula (solo el administrador),
 // y solo si no hubo otros movimientos del producto después (si ya vendiste parte, se corrige con un ajuste).
 import { Hono } from "hono";
-import { aCantidadMilli, aCentavos, calcular } from "../../public/dinero.js";
+import { aCantidadMilli, aCentavos, aTasaE8, calcular } from "../../public/dinero.js";
 import { auditar, comodin, esUnico, falla, fechaCaracas, idParam, leerJson, modoActual, parametrosVigentes, requiereAdmin, requiereSesion, texto, type Env } from "../comun";
 import { costoPromedio, guardaSaldo, movimiento, saldos } from "../stock";
 
@@ -24,7 +24,8 @@ compras.get("/:id", async (c) => {
   const f = await c.env.DB.prepare(`SELECT * FROM compras WHERE id = ?`).bind(idParam(c)).first<Fila>();
   if (!f) return falla(c, 404, "Compra no encontrada.");
   const { renglones_json, ...resto } = f;
-  return c.json({ ok: true, compra: resto, renglones: JSON.parse(renglones_json) });
+  const { results: impuestos } = await c.env.DB.prepare(`SELECT alicuota_cent, base_usd, iva_usd, base_bs, iva_bs FROM compra_impuestos WHERE compra_id = ? ORDER BY alicuota_cent`).bind(f.id).all();
+  return c.json({ ok: true, compra: resto, renglones: JSON.parse(renglones_json), impuestos });
 });
 
 compras.post("/", async (c) => {
@@ -55,8 +56,12 @@ compras.post("/", async (c) => {
     if (!permitidas.includes(alic)) return falla(c, 400, `${pos}: el IVA no es válido.`);
     ls.push({ producto_id: p.id, descripcion: p.nombre, cantidad_milli: cant, costo_usd: costo, alicuota_cent: alic });
   }
+  // Tasa BCV de la fecha de la factura del proveedor (la escribe quien registra; si no, la de hoy). Con ella se sacan los montos en Bs del libro de compras.
+  const dada = texto(b.tasa_bcv, 20), perfil = await db.prepare(`SELECT tasa_bcv FROM perfil_emisor WHERE id = 1`).first<Fila>();
+  const tasa = aTasaE8(dada || String(perfil?.tasa_bcv ?? ""));
+  if (!tasa || Number.isNaN(tasa)) return falla(c, 400, dada ? "La tasa BCV no es válida (ejemplo: 36,50)." : "Escribe la tasa BCV de la fecha de la factura (o define la de hoy en el Inicio).");
   let calc;
-  try { calc = calcular(ls.map((l) => ({ cantidad_milli: l.cantidad_milli, precio_usd: l.costo_usd, alicuota_cent: l.alicuota_cent })), null); }
+  try { calc = calcular(ls.map((l) => ({ cantidad_milli: l.cantidad_milli, precio_usd: l.costo_usd, alicuota_cent: l.alicuota_cent })), tasa); }
   catch (e) { return falla(c, 400, (e as Error).message); }
   const renglones = ls.map((l, i) => ({ ...l, monto_usd: calc.renglones[i].monto_usd }));
   const entradas = new Map<number, { cant: number; valor: number }>();
@@ -65,9 +70,16 @@ compras.post("/", async (c) => {
     return falla(c, 409, "Ya registraste esa factura de este proveedor.");
   const sal = await saldos(db, [...entradas.keys()]), modo = await modoActual(db);
   const pasos = [db.prepare(
-    `INSERT INTO compras (modo, proveedor_id, proveedor_rif, proveedor_nombre, factura_numero, control_numero, fecha, subtotal_usd, iva_usd, total_usd, nota, renglones_json, registrado_en, registrado_por)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(modo, prov.id, prov.rif, prov.nombre, factura, control, fecha, calc.subtotal_usd, calc.iva_usd, calc.total_usd, texto(b.nota, 300) || null, JSON.stringify(renglones), new Date().toISOString(), u.id)];
+    `INSERT INTO compras (modo, proveedor_id, proveedor_rif, proveedor_nombre, factura_numero, control_numero, fecha, subtotal_usd, iva_usd, total_usd,
+       tasa_e8, subtotal_bs, iva_bs, total_bs, nota, renglones_json, registrado_en, registrado_por)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(modo, prov.id, prov.rif, prov.nombre, factura, control, fecha, calc.subtotal_usd, calc.iva_usd, calc.total_usd,
+    tasa, calc.subtotal_bs, calc.iva_bs, calc.total_bs, texto(b.nota, 300) || null, JSON.stringify(renglones), new Date().toISOString(), u.id)];
+  // Base e IVA por alícuota (en USD y en Bs), pegados a la compra recién insertada en este mismo lote
+  for (const i of calc.impuestos)
+    pasos.push(db.prepare(`INSERT INTO compra_impuestos (compra_id, alicuota_cent, base_usd, iva_usd, base_bs, iva_bs)
+      SELECT id, ?, ?, ?, ?, ? FROM compras WHERE proveedor_id = ? AND factura_numero = ? AND estado = 'REGISTRADA'`)
+      .bind(i.alicuota_cent, i.base_usd, i.iva_usd, i.base_bs, i.iva_bs, prov.id, factura));
   for (const [pid, e] of entradas)
     pasos.push(guardaSaldo(db, pid, sal.get(pid)!),
       movimiento(db, { producto_id: pid, modo, tipo: "COMPRA", cantidad_milli: e.cant, valor_usd: e.valor, compra_ref: [prov.id, factura], fecha, uid: u.id }),
