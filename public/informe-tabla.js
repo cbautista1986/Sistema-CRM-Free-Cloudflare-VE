@@ -18,6 +18,7 @@ export const hoyCaracas = (d = new Date()) => new Intl.DateTimeFormat("en-CA", {
 export const INFORMES = [
   { clave: "ventas", icono: "📒", nombre: "Libro de ventas", ayuda: "Facturas emitidas con base e IVA en bolívares", periodo: true },
   { clave: "compras", icono: "📕", nombre: "Libro de compras", ayuda: "Compras registradas con su IVA crédito fiscal", periodo: true },
+  { clave: "resumen-iva", icono: "🧮", nombre: "Resumen mensual de IVA", ayuda: "Débito fiscal menos crédito fiscal, mes a mes, en Bs", periodo: true },
   { clave: "ganancias", icono: "💰", nombre: "Ganancias", ayuda: "Productos y servicios, por ítem y por cliente", periodo: true },
   { clave: "por-cobrar", icono: "💵", nombre: "Cuentas por cobrar", ayuda: "Estado de cuenta por cliente y antigüedad", periodo: false },
   { clave: "inventario", icono: "📦", nombre: "Inventario valorizado", ayuda: "Existencias × costo promedio y movimientos", periodo: true },
@@ -41,14 +42,40 @@ function modeloVentas(r) {
     secciones: [{ titulo: "Facturas", columnas, filas, totales }] };
 }
 
+const tasaTxt = (e8) => (e8 == null ? "Sin tasa" : (e8 / 1e8).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 4 }));
 function modeloCompras(r) {
+  const alic = r.alicuotas.map((a) => a.alicuota_cent);
+  const columnas = [izq("Fecha"), izq("RIF proveedor"), izq("Proveedor"), izq("N.º factura"), izq("N.º control"), izq("Estado"), der("Tasa BCV"),
+    ...alic.flatMap((a) => [der(`Base ${alicuota(a)} (Bs)`), ...(a === 0 ? [] : [der(`IVA ${alicuota(a)} (Bs)`)])]), der("Total (Bs)"), der("Total (USD)")];
+  const vacias = () => [...alic.flatMap((a) => (a === 0 ? [""] : ["", ""])), ""];
+  const filas = r.filas.map((f) => {
+    const anulada = f.estado === "ANULADA", base = [fecha(f.fecha), f.proveedor_rif, f.proveedor_nombre, f.factura_numero, f.control_numero || "", anulada ? "ANULADA" : "Registrada", anulada ? "" : tasaTxt(f.tasa_e8)];
+    if (anulada) return [...base, ...vacias(), ""];
+    if (f.tasa_e8 == null) return [...base, ...vacias(), num(f.total_usd)]; // compra anterior a la tasa: sin Bs, solo USD
+    const celdas = alic.flatMap((a) => { const i = f.impuestos.find((x) => x.alicuota_cent === a); return [num(i?.base_bs ?? 0), ...(a === 0 ? [] : [num(i?.iva_bs ?? 0)])]; });
+    return [...base, ...celdas, num(f.total_bs), num(f.total_usd)];
+  });
+  const totales = [["TOTAL", "", "", "", "", `${r.n_vigentes} registrada(s)`, "", ...alic.flatMap((a) => { const t = r.alicuotas.find((x) => x.alicuota_cent === a); return [num(t.base_bs), ...(a === 0 ? [] : [num(t.iva_bs)])]; }), num(r.total_bs), num(r.total_usd)]];
   return { clave: "compras", titulo: "Libro de compras", periodo: periodo(r),
-    resumen: [["Compras registradas", String(r.n_vigentes)], ["Anuladas (no suman)", String(r.n_anuladas)], ["IVA crédito fiscal (USD)", num(r.iva_usd)], ["Total (USD)", num(r.total_usd)]],
-    notas: ["Montos en dólares tal como se registró cada compra (las compras no guardan tasa BCV). Confirmar con el contador si el libro debe ir en bolívares."],
-    secciones: [{ titulo: "Compras", columnas: [izq("Fecha"), izq("RIF proveedor"), izq("Proveedor"), izq("N.º factura"), izq("N.º control"), izq("Estado"), der("Base (USD)"), der("IVA (USD)"), der("Total (USD)")],
-      filas: r.filas.map((f) => { const anulada = f.estado === "ANULADA"; return [fecha(f.fecha), f.proveedor_rif, f.proveedor_nombre, f.factura_numero, f.control_numero || "", anulada ? "ANULADA" : "Registrada",
-        anulada ? "" : num(f.subtotal_usd), anulada ? "" : num(f.iva_usd), anulada ? "" : num(f.total_usd)]; }),
-      totales: [["TOTAL", "", "", "", "", `${r.n_vigentes} registrada(s)`, num(r.subtotal_usd), num(r.iva_usd), num(r.total_usd)]] }] };
+    resumen: [["Compras registradas", String(r.n_vigentes)], ["Anuladas (no suman)", String(r.n_anuladas)], ["IVA crédito fiscal (Bs)", num(r.iva_bs)], ["Total en Bs", num(r.total_bs)],
+      ...(r.n_sin_tasa ? [["Sin tasa (no suman en Bs)", String(r.n_sin_tasa)]] : [])],
+    notas: ["Montos en bolívares: cada compra usa la tasa BCV de la fecha de su factura, la que se escribió al registrarla. Las anuladas se listan pero no suman. Los dólares son solo referencia.",
+      ...(r.n_sin_tasa ? [`${r.n_sin_tasa} compra(s) se registraron antes de guardar la tasa: salen solo en USD y no suman en Bs. Para el libro legal, el contador debe pasarlas a Bs con los montos de la factura del proveedor.`] : [])],
+    secciones: [{ titulo: "Compras", columnas, filas, totales }] };
+}
+
+const mesTxt = (m) => `${m.slice(5, 7)}/${m.slice(0, 4)}`;
+const resultadoIva = (d) => (d > 0 ? "A pagar" : d < 0 ? "Crédito a favor" : "-");
+function modeloResumenIva(r) {
+  const fila = (mes, x) => [mes, num(x.ventas_gravadas_bs), num(x.ventas_exentas_bs), num(x.debito_bs), num(x.compras_gravadas_bs), num(x.compras_exentas_bs), num(x.credito_bs), num(x.diferencia_bs), resultadoIva(x.diferencia_bs)];
+  const t = r.total;
+  return { clave: "resumen-iva", titulo: "Resumen mensual de IVA", periodo: periodo(r),
+    resumen: [["Débito fiscal (ventas)", num(t.debito_bs)], ["Crédito fiscal (compras)", num(t.credito_bs)], [t.diferencia_bs < 0 ? "Crédito a favor" : "Diferencia a pagar", num(Math.abs(t.diferencia_bs))]],
+    notas: ["Guía para tu contador, no es la declaración: no incluye retenciones de IVA, excedentes de meses anteriores ni notas de crédito o débito. Todo en bolívares.",
+      "Si el periodo no empieza el día 1 o no termina el último día del mes, los meses de los extremos salen incompletos.",
+      ...(t.compras_sin_tasa ? [`${t.compras_sin_tasa} compra(s) anteriores a la tasa no tienen Bs y no están en el crédito fiscal: el contador debe sumarlas aparte.`] : [])],
+    secciones: [{ titulo: "Por mes", columnas: [izq("Mes"), der("Ventas gravadas (base)"), der("Ventas exentas"), der("Débito fiscal"), der("Compras gravadas (base)"), der("Compras exentas"), der("Crédito fiscal"), der("Diferencia"), izq("Resultado")],
+      filas: r.filas.map((x) => fila(mesTxt(x.mes), x)), totales: r.filas.length ? [fila("TOTAL", t)] : [] }] };
 }
 
 function modeloGanancias(r) {
@@ -94,7 +121,7 @@ function modeloInventario(r) {
         filas: r.movimientos.map((m) => [fecha(m.fecha), m.producto, MOV[m.tipo] || m.tipo, MOTIVO[m.motivo] || "", cantidadTexto(m.cantidad_milli), num(m.valor_usd)]), totales: [] }] };
 }
 
-export const construirModelo = (clave, datos) => ({ ventas: modeloVentas, compras: modeloCompras, ganancias: modeloGanancias, "por-cobrar": modeloPorCobrar, inventario: modeloInventario })[clave](datos);
+export const construirModelo = (clave, datos) => ({ ventas: modeloVentas, compras: modeloCompras, "resumen-iva": modeloResumenIva, ganancias: modeloGanancias, "por-cobrar": modeloPorCobrar, inventario: modeloInventario })[clave](datos);
 
 // ---------------------------------------------------------------- CSV (separador «;» y coma decimal: abre bien en Excel en español)
 const celdaCsv = (t) => { let s = String(t ?? "").replace(/\r?\n/g, " ").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");

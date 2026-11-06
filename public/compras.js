@@ -1,7 +1,7 @@
 // Módulo COMPRAS (pantallas): facturas de compra, proveedores y existencias de cada producto.
 // Las existencias y el costo promedio los calcula el servidor; aquí solo se muestran y se registran movimientos.
-import { $, raiz, esc, usd, api, aviso, campo, enviar, navegacion, activar, telefono, ERROR } from "./comun.js";
-import { aCantidadMilli, aCentavos, calcular, cantidadTexto } from "./dinero.js";
+import { $, raiz, esc, usd, bs, api, aviso, campo, enviar, navegacion, activar, telefono, ERROR } from "./comun.js";
+import { aCantidadMilli, aCentavos, aTasaE8, calcular, cantidadTexto } from "./dinero.js";
 import { fijarFiltro } from "./catalogo.js";
 
 const fechaDoc = (iso) => (iso ? String(iso).slice(0, 10).split("-").reverse().join("/") : "");
@@ -15,7 +15,7 @@ const cablearPestanas = () => raiz.querySelectorAll(".chip").forEach((b) => b.ad
 // ------------------------------------------------------------------ rutas
 export async function vistaCompras(estado, id) {
   try {
-    if (id === "nueva") return nuevaCompra();
+    if (id === "nueva") return nuevaCompra(estado);
     if (id) return await verCompra(id);
   } catch (e) { aviso(e.message); location.hash = "#/compras"; return; }
   listaCompras();
@@ -59,15 +59,17 @@ function listaCompras() {
 }
 
 // ------------------------------------------------------------------ registrar una compra
-function nuevaCompra() {
-  const hoy = hoyCaracas(), d = { proveedor: null, lineas: [] };
+function nuevaCompra(estado) {
+  const hoy = hoyCaracas(), d = { proveedor: null, lineas: [] }, tasaInicial = String(estado?.negocio?.tasa_bcv ?? "").replace(".", ",");
   raiz.innerHTML = `
     <header class="encabezado"><button class="icono" id="atras" data-ayuda="Volver" aria-label="Volver">←</button><h1>Registrar compra</h1></header>
     <section class="tarjeta" id="sec-prov"></section>
     <section class="tarjeta"><span class="etiqueta">🧾 FACTURA DEL PROVEEDOR</span>
       ${campo("factura_numero", "Número de la factura", "", "text", 'required maxlength="40"')}
       ${campo("control_numero", "Número de control (opcional)", "", "text", 'maxlength="40"')}
-      ${campo("fecha", "📅 Fecha de la factura", hoy, "date", `max="${hoy}" required`)}</section>
+      ${campo("fecha", "📅 Fecha de la factura", hoy, "date", `max="${hoy}" required`)}
+      ${campo("tasa_bcv", "💱 Tasa BCV de la fecha de la factura (Bs por USD)", tasaInicial, "text", 'required inputmode="decimal" maxlength="20"')}
+      <p class="pista">Con esta tasa se pasa la compra a bolívares para el libro de compras. Si la factura es de otro día, escribe la tasa de ese día.</p></section>
     <section class="tarjeta"><span class="etiqueta">📦 PRODUCTOS COMPRADOS</span><div id="lineas"></div>
       <button type="button" class="boton chico morado" id="add-prod">🏷️ Agregar producto</button><div id="picker" hidden></div></section>
     <section class="tarjeta" id="sec-totales"></section>
@@ -153,7 +155,8 @@ function nuevaCompra() {
       if (cant === null || Number.isNaN(cant) || !costo || Number.isNaN(costo)) { malas++; return; }
       validas.push({ cantidad_milli: cant, precio_usd: costo, alicuota_cent: Math.round(l.alicuota_iva * 100), _i: i });
     });
-    try { return { r: calcular(validas, null), validas, malas }; } catch (e) { return { error: e.message, validas, malas }; }
+    const tasa = aTasaE8($("#tasa_bcv")?.value ?? ""), e8 = tasa && !Number.isNaN(tasa) ? tasa : null;
+    try { return { r: calcular(validas, e8), validas, malas, e8 }; } catch (e) { return { error: e.message, validas, malas }; }
   };
   function refrescar() {
     const c = calculo(), t = $("#sec-totales");
@@ -162,8 +165,10 @@ function nuevaCompra() {
     d.lineas.forEach((l, i) => { if (!c.validas.some((v) => v._i === i)) { const el = raiz.querySelector(`[data-sub="${i}"]`); if (el) el.textContent = "⚠️ Escribe la cantidad y el costo (ejemplo: 10 y 3,50)"; } });
     t.innerHTML = `<span class="etiqueta">💰 TOTAL DE LA COMPRA</span>
       <div class="tot"><span>Subtotal</span><b>${usd(c.r.subtotal_usd)}</b></div><div class="tot"><span>IVA</span><b>${usd(c.r.iva_usd)}</b></div>
-      <div class="tot grande"><span>TOTAL USD</span><b>${usd(c.r.total_usd)}</b></div>`;
+      <div class="tot grande"><span>TOTAL USD</span><b>${usd(c.r.total_usd)}</b></div>
+      ${c.e8 ? `<div class="tot"><span>IVA en bolívares</span><b>${bs(c.r.iva_bs / 100)}</b></div><div class="tot grande"><span>TOTAL Bs</span><b>${bs(c.r.total_bs / 100)}</b></div>` : `<p class="error">Escribe una tasa BCV válida (ejemplo: 36,50).</p>`}`;
   }
+  $("#tasa_bcv").addEventListener("input", refrescar);
 
   $("#registrar").addEventListener("click", async () => {
     const err = $("#error"), btn = $("#registrar"); err.hidden = true; btn.disabled = true;
@@ -171,11 +176,12 @@ function nuevaCompra() {
       if (!d.proveedor) throw new Error("Elige el proveedor.");
       const c = calculo();
       if (c.error) throw new Error(c.error);
+      if (!c.e8) throw new Error("Escribe una tasa BCV válida (ejemplo: 36,50).");
       if (!d.lineas.length || c.malas) throw new Error("Revisa los productos: hay cantidades o costos que faltan o están mal escritos.");
       const nuevos = d.lineas.filter((l) => !l.controla).map((l) => l.nombre);
-      if (!confirm(`¿Registrar la factura ${$("#factura_numero").value} de ${d.proveedor.nombre} por ${usd(c.r.total_usd)}?\n\nEntrarán a las existencias y se actualiza el costo promedio.`
+      if (!confirm(`¿Registrar la factura ${$("#factura_numero").value} de ${d.proveedor.nombre} por ${usd(c.r.total_usd)} (${bs(c.r.total_bs / 100)} a tasa ${$("#tasa_bcv").value})?\n\nEntrarán a las existencias y se actualiza el costo promedio.`
         + (nuevos.length ? `\n\nEmpezarán a controlar existencias: ${[...new Set(nuevos)].join(", ")}.` : ""))) return;
-      const r = await api("compras", "POST", { proveedor_id: d.proveedor.id, factura_numero: $("#factura_numero").value, control_numero: $("#control_numero").value, fecha: $("#fecha").value,
+      const r = await api("compras", "POST", { proveedor_id: d.proveedor.id, factura_numero: $("#factura_numero").value, control_numero: $("#control_numero").value, fecha: $("#fecha").value, tasa_bcv: $("#tasa_bcv").value,
         nota: $("#nota").value, lineas: d.lineas.map((l) => ({ producto_id: l.producto_id, cantidad: l.cantidad, costo_usd: l.costo, alicuota_iva: l.alicuota_iva })) });
       aviso("Compra registrada ✅"); location.hash = `#/compras/${r.id}`;
     } catch (e) { err.textContent = e.message; err.hidden = false; } finally { btn.disabled = false; }
@@ -185,7 +191,7 @@ function nuevaCompra() {
 
 // ------------------------------------------------------------------ ver una compra
 async function verCompra(id) {
-  const { compra: C, renglones } = await api(`compras/${encodeURIComponent(id)}`), anulada = C.estado === "ANULADA";
+  const { compra: C, renglones, impuestos } = await api(`compras/${encodeURIComponent(id)}`), anulada = C.estado === "ANULADA";
   raiz.innerHTML = `
     <header class="encabezado"><button class="icono" id="atras" data-ayuda="Volver" aria-label="Volver">←</button><h1>Compra ${esc(C.factura_numero)}</h1>
       <span class="insignia ${anulada ? "rojo" : "verde"}">${anulada ? "Anulada" : "Registrada"}</span></header>
@@ -198,6 +204,11 @@ async function verCompra(id) {
       <small class="suave">${cantidadTexto(l.cantidad_milli)} × ${usd(l.costo_usd)} · ${l.alicuota_cent ? "IVA " + l.alicuota_cent / 100 + "%" : "Exento"}</small></div><b>${usd(l.monto_usd)}</b></div>`).join("")}</section>
     <section class="tarjeta"><div class="tot"><span>Subtotal</span><b>${usd(C.subtotal_usd)}</b></div><div class="tot"><span>IVA</span><b>${usd(C.iva_usd)}</b></div>
       <div class="tot grande"><span>TOTAL</span><b>${usd(C.total_usd)}</b></div></section>
+    ${C.tasa_e8 ? `<section class="tarjeta"><span class="etiqueta">🇻🇪 EN BOLÍVARES (libro de compras)</span>
+      <div class="tot"><span>Tasa BCV usada</span><b>${(C.tasa_e8 / 1e8).toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</b></div>
+      ${impuestos.map((i) => `<div class="tot"><span>${i.alicuota_cent ? "Base " + i.alicuota_cent / 100 + "% · IVA " + bs(i.iva_bs / 100) : "Exento"}</span><b>${bs(i.base_bs / 100)}</b></div>`).join("")}
+      <div class="tot"><span>IVA crédito fiscal</span><b>${bs(C.iva_bs / 100)}</b></div><div class="tot grande"><span>TOTAL Bs</span><b>${bs(C.total_bs / 100)}</b></div></section>`
+      : `<section class="tarjeta"><p class="pista">Compra registrada antes de guardar la tasa: no tiene montos en bolívares.</p></section>`}
     ${C.nota ? `<section class="tarjeta"><span class="etiqueta">📝 NOTA</span><p>${esc(C.nota)}</p></section>` : ""}
     <p class="error" id="error" role="alert" hidden></p>
     ${anulada ? "" : `<button type="button" class="boton contorno" id="anular">⛔ Anular compra</button>
